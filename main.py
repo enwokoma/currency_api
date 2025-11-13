@@ -6,6 +6,8 @@ from fastapi.openapi.docs import get_swagger_ui_html
 
 import orjson
 import time
+import os
+import secrets
 
 from auth import (
     validate_api_key,
@@ -17,7 +19,33 @@ from auth import (
 from rate_limit import allow_request
 from utils import validate_currency, fetch_rates
 
-ADMIN_TOKEN = "change-this-admin-token"
+ADMIN_FILE = "admin_token.txt"
+
+
+def load_or_create_admin_token():
+    # If token exists already, read it
+    if os.path.exists(ADMIN_FILE):
+        with open(ADMIN_FILE, "r") as f:
+            token = f.read().strip()
+            if token:
+                return token
+
+    # Otherwise, generate new secure token
+    token = "admtok_" + secrets.token_hex(16)
+
+    with open(ADMIN_FILE, "w") as f:
+        f.write(token)
+
+    print("\n=============================================")
+    print(" 🔐 NEW ADMIN TOKEN GENERATED")
+    print(f" Your Admin Token: {token}")
+    print(" (Saved to admin_token.txt)")
+    print("=============================================\n")
+
+    return token
+
+
+ADMIN_TOKEN = load_or_create_admin_token()
 openapi_schema = None
 
 
