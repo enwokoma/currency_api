@@ -1,136 +1,214 @@
 # Currency Conversion API
 
-This repository provides a simple REST service that converts amounts
-between world currencies. It is built with [FastAPI](https://fastapi.tiangolo.com/)
-and consumes the open‑source [Exchange‑API](https://github.com/fawazahmed0/exchange-api)
-maintained by Fawaz Ahmed. The upstream dataset includes rates for
-over 200 currencies, cryptocurrencies and metals, published daily and
-served via jsDelivr. No API key or account is required.
+A **high-performance, production-ready currency conversion service** built with **FastAPI**, offering:
 
-## Features
+- Free global FX data (via Fawaz Ahmed's open API — 200+ currencies, no rate limits)  
+- Fallback FX provider for reliability  
+- Pretty JSON formatting  
+- CORS enabled for all frontend use cases  
+- API key authentication  
+- API key generation & revocation  
+- Rate limiting (per API key, per minute & per day)  
+- Secured Swagger documentation  
+- Clean modular architecture  
+- Logging middleware  
+- Health endpoint  
+- Suitable for SaaS, mobile apps, fintech products, and internal tools  
 
-* **Instant conversion** – convert any amount between any two supported
-  currencies using a single HTTP call.
-* **Free and unlimited** – there are no formal rate limits; the data is
-  served from a CDN. Please be respectful and consider caching.
-* **200+ currencies supported** – includes major world currencies,
-  cryptocurrencies, and precious metals.
-* **6‑hour in‑memory cache** – the service caches upstream rates for
-  six hours to minimize latency and redundant network calls. The
-  underlying dataset updates daily.
-* **Pretty‑printed JSON** – all responses are indented for human
-  readability.
+---
 
-## Installation
+# 📁 Project Structure
 
-1. Clone this repository and navigate into it:
+```
+currency_api/
+ ├── main.py
+ ├── auth.py
+ ├── rate_limit.py
+ ├── utils.py
+ ├── keys.json
+ ├── requirements.txt
+ └── README.md
+```
 
-   ```bash
-   git clone https://github.com/your‑username/currency‑conversion‑api.git
-   cd currency‑conversion‑api
-   ```
+---
 
-2. (Optional but recommended) create and activate a Python virtual
-   environment:
+# ⭐ Features
 
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
+### 🔐 API Key Authentication  
+All protected endpoints require an API key.  
+Clients may send the key via:
 
-3. Install the dependencies:
+```
+X-API-KEY: <your-api-key>
+```
 
-   ```bash
-   pip install -r currency_api/requirements.txt
-   ```
+Or:
 
-4. Start the development server:
+```
+?api_key=<your-api-key>
+```
 
-   ```bash
-   uvicorn currency_api.main:app --reload --host 0.0.0.0 --port 8000
-   ```
+---
 
-The API will be available at `http://localhost:8000/`. FastAPI also
-generates interactive documentation at `/docs` and `/redoc`.
+### 🔑 API Key Management  
+Admin endpoints let you generate, revoke, and list keys.  
+Keys are hashed using SHA-256 and stored in `keys.json`.
 
-## Usage
+---
 
-### Get a conversion rate
+### 📊 Rate Limiting  
+- 100 requests/minute  
+- 10,000 requests/day  
 
-Retrieve the exchange rate from one currency to another. The query
-parameters are `from` (base currency) and `to` (target currency). Both
-must be ISO currency codes (e.g. `USD`, `NGN`).
+---
 
+### 💱 Currency Conversion  
+Uses **Fawaz Ahmed’s Exchange-API** (no rate limits, 200+ currencies).  
+Falls back to **exchangerate.host**.
+
+---
+
+### 🎨 Pretty JSON  
+All responses are indented for readability.
+
+---
+
+### 🌍 CORS Enabled  
+Frontend frameworks can access API without restrictions.
+
+---
+
+### 📜 Secured Swagger Docs  
+Endpoints:  
+- `/docs`  
+- `/openapi.json`  
+
+Both require a valid API key.
+
+---
+
+### 🔍 Logging Middleware  
+Example log:
+
+```
+[GET] /convert 200 18.33ms
+```
+
+---
+
+### 🟢 Health Endpoint
+
+```
+GET /health
+```
+
+---
+
+# 🔧 Installation
+
+### Clone the repository
+```bash
+git clone https://github.com/<your-username>/currency_api.git
+cd currency_api
+```
+
+### Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Set Admin Token
+```bash
+export ADMIN_TOKEN=your-secret-token
+```
+
+### Run the API
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+---
+
+# 🔐 Admin Endpoints
+
+### Generate an API Key
+```
+POST /admin/generate-key
+```
+```json
+{ "owner": "Emmanuel" }
+```
+
+### Revoke a Key
+```
+POST /admin/revoke-key
+```
+```json
+{ "api_key": "<key>" }
+```
+
+### List Keys
+```
+GET /admin/keys
+```
+
+---
+
+# 💱 User Endpoints
+
+### Get FX Rate
 ```
 GET /rate?from=USD&to=NGN
 ```
 
-Example response:
-
-```json
-{
-  "from": "USD",
-  "to": "NGN",
-  "rate": 1630.234
-}
+### Convert Amount
+```
+GET /convert?from=EUR&to=USD&amount=50
 ```
 
-### Convert an amount
+---
 
-Convert a specific amount from one currency to another. Query
-parameters:
+# 🚀 Deployment
 
-* `from` – base currency ISO code (e.g. `EUR`)
-* `to` – target currency ISO code (e.g. `USD`)
-* `amount` – numeric amount to convert
+## Railway
+- Deploy from GitHub
+- Build command: `pip install -r requirements.txt`
+- Start command:  
+  ```
+  uvicorn main:app --host 0.0.0.0 --port $PORT
+  ```
 
+## Render
+Same as Railway.
+
+## AWS Lambda
+Use **Mangum** adapter and deploy via API Gateway.
+
+## Docker
 ```
-GET /convert?from=EUR&to=USD&amount=100
-```
-
-Example response:
-
-```json
-{
-  "from": "EUR",
-  "to": "USD",
-  "amount": 100.0,
-  "rate": 1.0945,
-  "converted_amount": 109.45
-}
-```
-
-### Error handling
-
-If either currency code is unsupported, the service returns a
-`400 Bad Request` with an informative error message. Other HTTP
-errors from the upstream API (e.g. network failures) are propagated as
-`400` errors.
-
-## Deployment
-
-This service is lightweight and can run anywhere Python is supported.
-Below is an example `Dockerfile` to build a container image:
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY currency_api/ ./currency_api/
-COPY currency_api/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-CMD ["uvicorn", "currency_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+docker build -t currency_api .
+docker run -p 8000:8000 -e ADMIN_TOKEN=token currency_api
 ```
 
-After building the image with `docker build -t currency-api .`, you can
-run it using `docker run -p 8000:8000 currency-api`.
+---
 
-On platform‑as‑a‑service providers like Render or Railway, point the
-entry command to `uvicorn currency_api.main:app --host 0.0.0.0 --port $PORT`.
+# 🔒 Security Notes
 
-## Acknowledgements
+- Always keep ADMIN_TOKEN private  
+- Never commit raw API keys  
+- Put behind Cloudflare if needed  
+- Switch rate limiting to Redis in production  
 
-* The underlying exchange rates are provided by the
-  [Exchange‑API](https://github.com/fawazahmed0/exchange-api) project,
-  which releases its data under the CC0-1.0 license.
-* This project itself is released under the MIT License (see
-  [LICENSE](LICENSE)).
+---
+
+# ❤️ Credits
+
+Uses public FX data from:
+
+**Fawaz Ahmed – Exchange API**  
+https://github.com/fawazahmed0/exchange-api
+
+Fallback provider: **exchangerate.host**
+
+---
+
