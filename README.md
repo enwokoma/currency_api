@@ -1,238 +1,136 @@
 # Currency Conversion API
 
-Welcome to the **Currency Conversion API** – a high‑performance,
-subscription‑aware service for converting amounts between world
-currencies. The API is built with [FastAPI](https://fastapi.tiangolo.com/)
-and powered by the open‑source
-[Exchange‑API](https://github.com/fawazahmed0/exchange-api) project. The
-upstream dataset offers over 200 currency rates (including common
-cryptocurrencies and metals) and is updated daily【342527198209133†L11-L16】.
+This repository provides a simple REST service that converts amounts
+between world currencies. It is built with [FastAPI](https://fastapi.tiangolo.com/)
+and consumes the open‑source [Exchange‑API](https://github.com/fawazahmed0/exchange-api)
+maintained by Fawaz Ahmed. The upstream dataset includes rates for
+over 200 currencies, cryptocurrencies and metals, published daily and
+served via jsDelivr. No API key or account is required.
 
-This repository packages the exchange data into a secure, rate‑limited
-service with free and paid tiers, Paystack billing integration, and
-pretty‑printed JSON responses. Whether you need a simple rate lookup
-or a full subscription flow for your application, this API has you
-covered.
+## Features
 
----
+* **Instant conversion** – convert any amount between any two supported
+  currencies using a single HTTP call.
+* **Free and unlimited** – there are no formal rate limits; the data is
+  served from a CDN. Please be respectful and consider caching.
+* **200+ currencies supported** – includes major world currencies,
+  cryptocurrencies, and precious metals.
+* **6‑hour in‑memory cache** – the service caches upstream rates for
+  six hours to minimize latency and redundant network calls. The
+  underlying dataset updates daily.
+* **Pretty‑printed JSON** – all responses are indented for human
+  readability.
 
-## 🔑 Authentication & Tiers
+## Installation
 
-All core endpoints require an **API key**. Keys come in two flavours:
-
-| Tier   | How to obtain | Limits (per minute / per day) | Notes |
-|--------|---------------|-------------------------------|------|
-| **Free** | `POST /auth/free-key` | 10 requests per minute, 200 per day | Great for prototypes and low‑volume usage |
-| **Paid** | Admin‑generated or upgraded via Paystack | Depends on plan (e.g. 100/10k or 300/50k) | Unlock higher limits and premium support |
-
-API keys are sent via HTTP header (`X-API-KEY`) or query
-parameter (`api_key`). If absent or invalid, the API returns
-`401 Unauthorized`.
-
-### 🔐 Admin Token
-
-Administrative endpoints (key generation, revocation, listing) are
-protected by a separate **admin token**. On first run the service
-generates a secure token and writes it to `admin_token.txt`; you can
-also set `ADMIN_TOKEN` in your environment. Use this token in the
-`X-ADMIN-TOKEN` header to call admin routes.
-
----
-
-## 📑 Endpoints Overview
-
-### Core Endpoints (API key required)
-
-| Method & path | Description |
-|---------------|-------------|
-| `GET /me/usage` | Return remaining credits, rate limits and next reset for your key |
-| `GET /rate?from=USD&to=NGN` | Return the exchange rate from one currency to another |
-| `GET /convert?from=EUR&to=USD&amount=50` | Convert an amount from one currency to another |
-
-### Auth Endpoints
-
-| Method & path | Description |
-|---------------|-------------|
-| `POST /auth/free-key` | Obtain a free‑tier API key instantly |
-
-### Billing Endpoints
-
-| Method & path | Description |
-|---------------|-------------|
-| `GET /plans` | List available subscription plans |
-| `POST /billing/upgrade` | Start a Paystack transaction to upgrade a key |
-| `POST /paystack/webhook` | Receive Paystack events and apply upgrades/downgrades |
-
-### Admin Endpoints (admin token required)
-
-| Method & path | Description |
-|---------------|-------------|
-| `POST /admin/generate-key` | Generate a new paid API key |
-| `POST /admin/revoke-key` | Revoke an existing API key |
-| `GET /admin/keys` | List all keys with metadata |
-| `GET /admin/usage` | Admin report: usage and limits for all keys |
-
-The API also exposes a health check at `/health` (no auth) and
-secured documentation at `/docs` and `/openapi.json` (API key
-required), plus public documentation at `/public/docs`, `/public/redoc`
-and `/public/openapi.json` that can be browsed without a key.
-
----
-
-## 💡 How It Works
-
-1. **Get a free key**: `POST /auth/free-key` returns a JSON object
-   containing a `free_` prefixed API key. Use it in the `X-API-KEY` header.
-2. **Hit rate limits**: Free keys are limited to 10 requests/min and
-   200/day. Paid keys without a plan fall back to 100/min and
-   10 000/day.
-3. **List plans**: `GET /plans` shows available subscription
-   options. Each plan has a price (in NGN) and custom rate limits.
-4. **Upgrade via Paystack**:
-   - Call `POST /billing/upgrade` with your email and the `plan_code`
-     you want. The request must be authenticated with the key you wish
-     to upgrade.
-   - The API returns an `authorization_url` and a `reference`.
-   - Redirect your user to the URL to complete payment.
-   - Paystack sends a webhook to `/paystack/webhook`. On success, the
-     key’s tier becomes `paid` and its plan code is stored. If
-     subscription is disabled or a payment fails, the key downgrades
-     back to free.
-
-5. **Monthly credit reset**:
-   Each API key has a monthly credit budget (free‑tier or plan‑specific).
-   Credits reset automatically every 30 days based on a `credits_reset_at`
-   timestamp stored in the key record. When the reset time is reached,
-   the service replenishes the key’s credits and moves the reset
-   timestamp forward. You can view your remaining credits and the
-   next reset date via `GET /me/usage`.
-
----
-
-## 🚀 Installation & Running Locally
-
-1. **Clone the repo** and change into it:
+1. Clone this repository and navigate into it:
 
    ```bash
-   git clone https://github.com/<your-username>/currency_api.git
-   cd currency_api
+   git clone https://github.com/your‑username/currency‑conversion‑api.git
+   cd currency‑conversion‑api
    ```
 
-2. **Install dependencies**:
+2. (Optional but recommended) create and activate a Python virtual
+   environment:
 
    ```bash
-   pip install -r requirements.txt
+   python3 -m venv venv
+   source venv/bin/activate
    ```
 
-3. **Set environment variables** (optional but recommended):
-
-   - `ADMIN_TOKEN` – overrides the generated admin token.
-   - `PAYSTACK_SECRET_KEY` – your Paystack secret for billing.
-
-   For example:
+3. Install the dependencies:
 
    ```bash
-   export ADMIN_TOKEN=super-secret-admin
-   export PAYSTACK_SECRET_KEY=sk_test_xxxxxxxx
+   pip install -r currency_api/requirements.txt
    ```
 
-4. **Run the server**:
+4. Start the development server:
 
    ```bash
    uvicorn currency_api.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
-5. **Generate your first paid key** (if you’re the admin):
+The API will be available at `http://localhost:8000/`. FastAPI also
+generates interactive documentation at `/docs` and `/redoc`.
 
-   ```bash
-   curl -X POST http://localhost:8000/admin/generate-key \
-     -H "X-ADMIN-TOKEN: <your-admin-token>" \
-     -H "Content-Type: application/json" \
-     -d '{"owner": "Alice"}'
-   ```
+## Usage
 
-6. **Call the API**:
+### Get a conversion rate
 
-   ```bash
-   curl "http://localhost:8000/convert?from=USD&to=NGN&amount=100" \
-     -H "X-API-KEY: <your-api-key>"
-   ```
+Retrieve the exchange rate from one currency to another. The query
+parameters are `from` (base currency) and `to` (target currency). Both
+must be ISO currency codes (e.g. `USD`, `NGN`).
 
----
+```
+GET /rate?from=USD&to=NGN
+```
 
-## 🔧 Deployment
+Example response:
 
-This service is suitable for deployment on any cloud or self‑hosted
-platform. For convenience, here are some guidelines:
+```json
+{
+  "from": "USD",
+  "to": "NGN",
+  "rate": 1630.234
+}
+```
 
-### Railway
+### Convert an amount
 
-1. Push this repo to GitHub.
-2. Create a new Railway project and link the repository.
-3. Set environment variables in Railway:
-   - `ADMIN_TOKEN` (optional)
-   - `PAYSTACK_SECRET_KEY`
-4. Use the build command `pip install -r requirements.txt` and start
-   command:
+Convert a specific amount from one currency to another. Query
+parameters:
 
-   ```bash
-   uvicorn currency_api.main:app --host 0.0.0.0 --port ${PORT:-8000}
-   ```
-5. Deploy! Railway handles HTTPS and scaling.
+* `from` – base currency ISO code (e.g. `EUR`)
+* `to` – target currency ISO code (e.g. `USD`)
+* `amount` – numeric amount to convert
 
-### Render
+```
+GET /convert?from=EUR&to=USD&amount=100
+```
 
-1. Create a Web Service from your GitHub repo.
-2. Choose a Python environment; set build command `pip install -r
-   requirements.txt`.
-3. Set start command and environment variables as above.
-4. Render automatically provisions HTTPS for you.
+Example response:
 
-### AWS Lambda (serverless)
+```json
+{
+  "from": "EUR",
+  "to": "USD",
+  "amount": 100.0,
+  "rate": 1.0945,
+  "converted_amount": 109.45
+}
+```
 
-1. Install [`Mangum`](https://github.com/erm/mangum) to adapt FastAPI
-   for Lambda: `pip install mangum`.
-2. Add a `lambda_main.py` file:
+### Error handling
 
-   ```python
-   from currency_api.main import app
-   from mangum import Mangum
+If either currency code is unsupported, the service returns a
+`400 Bad Request` with an informative error message. Other HTTP
+errors from the upstream API (e.g. network failures) are propagated as
+`400` errors.
 
-   handler = Mangum(app)
-   ```
+## Deployment
 
-3. Package dependencies or build a container image.
-4. Connect an API Gateway to the Lambda function.
-
-### Docker / VPS
-
-Create a `Dockerfile`:
+This service is lightweight and can run anywhere Python is supported.
+Below is an example `Dockerfile` to build a container image:
 
 ```dockerfile
 FROM python:3.11-slim
 WORKDIR /app
-COPY . .
+COPY currency_api/ ./currency_api/
+COPY currency_api/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-ENV ADMIN_TOKEN=change-me
-EXPOSE 8000
 CMD ["uvicorn", "currency_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-Build and run:
+After building the image with `docker build -t currency-api .`, you can
+run it using `docker run -p 8000:8000 currency-api`.
 
-```bash
-docker build -t currency-api .
-docker run -p 8000:8000 -e ADMIN_TOKEN=super-secret -e PAYSTACK_SECRET_KEY=sk_test_xxxx currency-api
-```
+On platform‑as‑a‑service providers like Render or Railway, point the
+entry command to `uvicorn currency_api.main:app --host 0.0.0.0 --port $PORT`.
 
----
+## Acknowledgements
 
-## 📒 License & Credits
-
-This project is licensed under the MIT license. It builds upon the
-open exchange data published by Fawaz Ahmed under the CC0-1.0
-license【342527198209133†L11-L16】.
-
-If you need plan customizations, cancellation flows, or additional
-features such as a web dashboard, feel free to extend the code! Pull
-requests are welcome.
+* The underlying exchange rates are provided by the
+  [Exchange‑API](https://github.com/fawazahmed0/exchange-api) project,
+  which releases its data under the CC0-1.0 license.
+* This project itself is released under the MIT License (see
+  [LICENSE](LICENSE)).

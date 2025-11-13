@@ -1,761 +1,161 @@
-"""Main application module for the currency conversion API.
+"""Currency Conversion API using FastAPI.
 
-This file wires together all components of the service, including
-authentication, rate limiting, billing, and the core currency
-conversion endpoints. All requests (except health and free key
-creation) require a valid API key. Admin endpoints are secured by an
-admin token. Swagger and OpenAPI documentation are also locked
-behind API authentication.
+This API wraps the open‐source Exchange API maintained by Fawaz Ahmed to
+provide quick conversion rates between world currencies. Rates are
+cached for six hours to minimize network requests. All responses are
+pretty‑printed JSON.
 """
 
-from __future__ import annotations
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import ORJSONResponse
+from cachetools import TTLCache
+import requests
+import orjson
 
-import os
-import time
-from typing import Dict, Any, Optional
-
-try:
-    # Attempt to import orjson and the high‑performance response class.
-    import orjson  # type: ignore
-    from fastapi.responses import ORJSONResponse
-except ImportError:
-    # If orjson is not available, fall back to the standard library JSON response.
-    import json  # standard library
-    from fastapi.responses import JSONResponse  # type: ignore
-    # Alias ORJSONResponse to JSONResponse so FastAPI will use it as the default
-    ORJSONResponse = JSONResponse  # type: ignore
-
-    class _FakeOrjson:
-        """
-        Simple shim to emulate a subset of the orjson API used by this
-        application. It avoids modifying the global ``json`` module and
-        provides ``dumps``/``loads`` compatibly. ``OPT_INDENT_2`` is
-        defined only for signature compatibility and is ignored.
-        """
-
-        OPT_INDENT_2 = None  # orjson option placeholder
-
-        @staticmethod
-        def dumps(obj, option=None):  # type: ignore
-            return json.dumps(obj).encode()
-
-        @staticmethod
-        def loads(b):  # type: ignore
-            if isinstance(b, (bytes, bytearray)):
-                b = b.decode()
-            return json.loads(b)
-
-    # Provide a fake orjson module so code using orjson.dumps/loads still works
-    orjson = _FakeOrjson()  # type: ignore
-
-from fastapi import (
-    FastAPI,
-    HTTPException,
-    Request,
-    Depends,
-    Query,
-    Body,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-# Import JSONResponse and HTMLResponse only. ORJSONResponse is
-# conditionally aliased above based on the availability of orjson.
-from fastapi.responses import JSONResponse, HTMLResponse  # noqa: F401
-from fastapi.openapi.utils import get_openapi
-from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-
-from pydantic import BaseModel
-
-from auth import (
-    validate_api_key,
-    generate_api_key,
-    generate_free_key,
-    revoke_api_key,
-    load_keys,
-    upgrade_key_tier_by_hash,
-    charge_call_for_key,
-    SECONDS_PER_MONTH,
-)
-from rate_limit import allow_request
-from utils import validate_currency, fetch_rates
-from billing import (
-    initialize_transaction,
-    verify_paystack_signature,
-    extract_webhook_info,
-)
-
-# Try to load environment variables from a .env file if python-dotenv is installed.
-try:
-    from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
-except ImportError:
-    # python‑dotenv is optional; environment variables can still be provided
-    pass
-
-
-# The admin token for key management. This is loaded from the
-# environment if present; otherwise a secure token will be generated
-# and persisted on disk. See `_load_or_create_admin_token` below.
-ADMIN_FILE = "admin_token.txt"
-
-
-def _load_or_create_admin_token() -> str:
-    # If a token is set via environment, use it
-    env_token = os.getenv("ADMIN_TOKEN")
-    if env_token:
-        return env_token
-    # If token file exists, read it
-    if os.path.exists(ADMIN_FILE):
-        with open(ADMIN_FILE, "r", encoding="utf-8") as fh:
-            token = fh.read().strip()
-            if token:
-                return token
-    # Otherwise generate a new secure token and save it
-    import secrets
-
-    token = "admtok_" + secrets.token_hex(16)
-    with open(ADMIN_FILE, "w", encoding="utf-8") as fh:
-        fh.write(token)
-    print(
-        "\n=============================================\n"
-        " 🔐 NEW ADMIN TOKEN GENERATED\n"
-        f" Your Admin Token: {token}\n"
-        " (Saved to admin_token.txt)\n"
-        "=============================================\n"
-    )
-    return token
-
-
-ADMIN_TOKEN = _load_or_create_admin_token()
-
-
-# Subscription plans. Update this list to match the plans created in
-# your Paystack dashboard. Each plan defines the price in Naira, the
-# rate limits (per minute and per day), and the monthly credits
-# (billable calls) available on the plan. ``monthly_credits`` can be
-# None to indicate unlimited billable calls.
-PLANS = [
-    {
-        "code": "BASIC_MONTHLY",
-        "name": "Basic Monthly",
-        "price_naira": 2000,
-        "currency": "NGN",
-        "requests_per_minute": 100,
-        "requests_per_day": 10_000,
-        "monthly_credits": 5000,
-    },
-    {
-        "code": "PRO_MONTHLY",
-        "name": "Pro Monthly",
-        "price_naira": 5000,
-        "currency": "NGN",
-        "requests_per_minute": 300,
-        "requests_per_day": 50_000,
-        "monthly_credits": 20_000,
-    },
-]
-
-# Free-tier limits and credits
-FREE_REQUESTS_PER_MINUTE = 10
-FREE_REQUESTS_PER_DAY = 200
-FREE_TIER_MONTHLY_CREDITS = 200
-
-# Default paid limits for keys that are tier='paid' but have no plan_code
-# These limits are applied to admin-generated keys and any paid key that
-# is not yet subscribed to a plan. They reflect the baseline of our
-# Basic plan (100 calls per minute, 10k per day).
-DEFAULT_PAID_REQUESTS_PER_MINUTE = 100
-DEFAULT_PAID_REQUESTS_PER_DAY = 10_000
-
-
-# ---------------------------------------------------------------------------
-# Helpers for timestamp conversion
-# ---------------------------------------------------------------------------
-# Define West Africa Time (UTC+1) timezone for converting numeric timestamps.
-from datetime import datetime, timezone, timedelta
-
-# West Africa Time (Lagos) does not observe daylight savings.
-WAT = timezone(timedelta(hours=1))
-
-def to_wat_iso(value: Any) -> Any:
-    """
-    Convert a numeric timestamp (epoch) to a West Africa Time ISO string without timezone.
-
-    If ``value`` is a float or int representing seconds since the UNIX epoch,
-    it will be converted to a ``datetime`` in the WAT timezone, then the
-    timezone information will be removed before converting to ISO 8601 format
-    with millisecond precision. This omits the ``+01:00`` suffix for a
-    cleaner display while still representing Africa/Lagos local time.
-
-    Non-numeric values are returned unchanged.
-    """
-    if isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(value, WAT)
-        naive = dt.replace(tzinfo=None)
-        return naive.isoformat(timespec="milliseconds")
-    return value
-
-
-# Pydantic models for request bodies
-class OwnerPayload(BaseModel):
-    owner: str
-
-
-class RevokePayload(BaseModel):
-    api_key: str
-
-
-class UpgradePayload(BaseModel):
-    email: str
-    plan_code: str
-
-
-# FastAPI app configuration
 app = FastAPI(
     title="Currency Conversion API",
     description=(
-        "Fast, cached currency conversion API using Fawaz Ahmed's Exchange API "
-        "with fallback provider, API keys, rate limiting, free and paid tiers, "
-        "and Paystack subscription upgrades."
+        "Free, unlimited currency conversion service built on top of "
+        "the Exchange‑API by Fawaz Ahmed. Supports over 200 currencies "
+        "including many cryptocurrencies and metals. Rates are refreshed "
+        "daily and cached for six hours."
     ),
-    version="3.0.0",
+    version="1.0.0",
     default_response_class=ORJSONResponse,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
 )
 
-# Enable CORS for all origins (adjust in production as needed)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Cache up to 500 base‑currency lookups for six hours. Exchange‑API
+# publishes daily JSON files, so caching longer than six hours is safe.
+cache: TTLCache[str, dict] = TTLCache(maxsize=500, ttl=60 * 60 * 6)
+
+BASE_URL = (
+    "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies"
 )
 
 
-# Middleware: logging requests and pretty JSON formatting
-@app.middleware("http")
-async def request_logger(request: Request, call_next):
-    start = time.time()
-    response = await call_next(request)
-    duration = round((time.time() - start) * 1000, 2)
-    print(
-        f"[{request.method}] {request.url.path} {response.status_code} {duration}ms"
-    )
-    return response
+def fetch_rates(base: str) -> dict:
+    """Fetch conversion rates for a given base currency.
+
+    Args:
+        base: Three‑letter ISO currency code (e.g. "usd").
+
+    Returns:
+        Dictionary mapping target currency codes to their rates relative
+        to the base currency.
+
+    Raises:
+        HTTPException: If the upstream API does not return a JSON
+            document for the requested currency or if the currency is
+            unsupported.
+    """
+    base = base.lower()
+    # Return from cache if available
+    if base in cache:
+        return cache[base]
+
+    url = f"{BASE_URL}/{base}.json"
+    response = requests.get(url, timeout=10)
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid base currency '{base.upper()}' or network error.",
+        )
+    data = response.json()
+    rates = data.get(base)
+    if not isinstance(rates, dict):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Currency '{base.upper()}' not found in upstream API.",
+        )
+    # Store in cache and return
+    cache[base] = rates
+    return rates
+
+
+def pretty_json(obj: dict) -> str:
+    """Serialize a Python object to indented JSON using orjson."""
+    return orjson.dumps(obj, option=orjson.OPT_INDENT_2).decode()
 
 
 @app.middleware("http")
 async def prettify_json(request: Request, call_next):
-    resp = await call_next(request)
-    if hasattr(resp, "body"):
+    """Middleware to pretty‑print ORJSONResponse bodies.
+
+    FastAPI with ORJSONResponse returns compact JSON by default. This
+    middleware intercepts responses and re‑serializes them with
+    indentation for readability. Non‑JSON responses are passed
+    untouched.
+    """
+    response = await call_next(request)
+    if isinstance(response, ORJSONResponse):
         try:
-            data = orjson.loads(resp.body)
-            resp.body = orjson.dumps(data, option=orjson.OPT_INDENT_2)
+            # Decode original body and re‑encode with indentation
+            data = orjson.loads(response.body)
+            pretty = pretty_json(data)
+            response.body = pretty.encode()
         except Exception:
+            # If decoding fails, leave the response untouched
             pass
-    return resp
+    return response
 
 
-# Dependency: enforce API key presence and rate limiting
-def api_key_required(request: Request) -> Dict[str, Any]:
-    """Resolve the calling key, enforce rate limits and charge credits.
-
-    For free tier keys, uses ``FREE_REQUESTS_PER_MINUTE``,
-    ``FREE_REQUESTS_PER_DAY`` and ``FREE_TIER_MONTHLY_CREDITS``.
-    For paid keys, derives limits and credits from the plan. If no
-    plan is bound, defaults to the Basic limits (100/min, 10k/day) and
-    unlimited credits.
-    """
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
-    key_record = validate_api_key(raw_key)
-    tier = key_record.get("tier", "paid")
-    plan_code = key_record.get("plan_code")
-    # Determine rate limits based on tier and plan.
-    # Free tier keys always use free limits. Paid keys use plan limits if
-    # available, otherwise default to the paid defaults. We do not treat
-    # paid keys with no plan_code as free.
-    if tier == "free":
-        per_minute = FREE_REQUESTS_PER_MINUTE
-        per_day = FREE_REQUESTS_PER_DAY
-    else:
-        # Paid tier
-        if plan_code:
-            plan = next((p for p in PLANS if p["code"] == plan_code), None)
-            if plan:
-                per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
-                per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
-            else:
-                # Unknown plan code → use default paid limits
-                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-        else:
-            # No plan bound → default paid limits
-            per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-            per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-    # Enforce rate limits
-    allow_request(
-        key_hash=key_record["key_hash"],
-        per_minute=per_minute,
-        per_day=per_day,
-    )
-    # Charge credits
-    charge_call_for_key(
-        key_record=key_record,
-        free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
-        plans=PLANS,
-    )
-    return key_record
-
-
-# ---------------------------------------------------------------------------
-# Utility and admin authentication dependencies
-# ---------------------------------------------------------------------------
-
-def admin_required(request: Request) -> bool:
-    """Validate the admin token for protected admin endpoints.
-
-    The expected admin token is determined dynamically. If an
-    ``ADMIN_TOKEN`` environment variable is set, it takes priority.
-    Otherwise, the module-level ``ADMIN_TOKEN`` value (generated or
-    loaded from ``admin_token.txt``) is used. This allows tests to
-    override the admin token via environment variables even after the
-    app has been imported.
-    """
-    provided = request.headers.get("X-ADMIN-TOKEN") or request.query_params.get(
-        "admin_token"
-    )
-    # Determine the expected token: prefer environment variable, else fallback
-    expected = os.getenv("ADMIN_TOKEN") or ADMIN_TOKEN
-    if provided != expected:
-        raise HTTPException(status_code=403, detail="Invalid admin token")
-    return True
-
-# ---------------------------------------------------------------------------
-# Usage information endpoints
-# ---------------------------------------------------------------------------
-
-@app.get("/me/usage", tags=["Usage"])  # new endpoint
-def get_usage(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]:
-    """Return remaining credits and rate limits for the caller's API key.
-
-    This endpoint does not consume credits. It resets credits if the
-    current period has expired.
-    """
-    # Determine tier and plan
-    tier = key.get("tier", "paid")
-    plan_code = key.get("plan_code")
-    # Compute rate limits consistent with api_key_required
-    if tier == "free":
-        per_minute = FREE_REQUESTS_PER_MINUTE
-        per_day = FREE_REQUESTS_PER_DAY
-        plan_info: Optional[Dict[str, Any]] = None
-    else:
-        if plan_code:
-            plan_info = next((p for p in PLANS if p["code"] == plan_code), None)
-            if plan_info:
-                per_minute = plan_info.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
-                per_day = plan_info.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
-            else:
-                plan_info = None
-                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-        else:
-            plan_info = None
-            per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-            per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-    # Reset credits if needed and compute remaining credits
-    now = time.time()
-    # Load keys to update if necessary
-    # Import from the local auth module to avoid circular references
-    from auth import load_keys, save_keys
-    data = load_keys()
-    credits = None
-    next_reset = None
-    for record in data.get("keys", []):
-        if record.get("key_hash") == key["key_hash"]:
-            # Reset if expired
-            reset_at = record.get("credits_reset_at")
-            if reset_at is not None and now >= reset_at:
-                # Determine plan again
-                plan = None
-                if plan_code:
-                    plan = next((p for p in PLANS if p["code"] == plan_code), None)
-                if tier == "free":
-                    record["credits"] = FREE_TIER_MONTHLY_CREDITS
-                    record["credits_reset_at"] = now + SECONDS_PER_MONTH
-                else:
-                    if plan:
-                        mc = plan.get("monthly_credits")
-                        record["credits"] = mc
-                        if mc is None:
-                            record["credits_reset_at"] = None
-                        else:
-                            record["credits_reset_at"] = now + SECONDS_PER_MONTH
-                    else:
-                        record["credits"] = None
-                        record["credits_reset_at"] = None
-                save_keys(data)
-            credits = record.get("credits")
-            next_reset = record.get("credits_reset_at")
-            break
-    return {
-        "tier": tier,
-        "plan_code": plan_code,
-        "rate_limits": {"per_minute": per_minute, "per_day": per_day},
-        "remaining_credits": credits,
-        "credits_reset_at": next_reset,
-    }
-
-
-@app.get("/admin/usage", tags=["Admin"])  # new admin endpoint
-def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
-    """Return usage statistics for all API keys.
-
-    This endpoint provides an overview of every key's remaining credits,
-    reset timestamp and current rate limits. It also performs credit
-    resets when the ``credits_reset_at`` timestamp has passed. Using
-    floats for timestamps ensures correct comparisons against the
-    current time.
-    """
-    # Import here to avoid circular references. Use relative import because
-    # this module is part of the same package. Without the leading dot,
-    # FastAPI may import the wrong module or raise ModuleNotFoundError in
-    # certain contexts (e.g., tests running from outside the package).
-    from auth import load_keys, save_keys
-
-    data = load_keys()
-    now_ts = time.time()  # current epoch time
-    usage: list[Dict[str, Any]] = []
-    modified = False
-    for record in data.get("keys", []):
-        tier = record.get("tier", "paid")
-        plan_code = record.get("plan_code")
-        # ----------------------------
-        # Determine per-minute and per-day limits
-        # ----------------------------
-        if tier == "free":
-            per_minute = FREE_REQUESTS_PER_MINUTE
-            per_day = FREE_REQUESTS_PER_DAY
-        else:
-            if plan_code:
-                plan = next((p for p in PLANS if p["code"] == plan_code), None)
-                if plan:
-                    per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
-                    per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
-                else:
-                    # Unknown plan → default paid limits
-                    per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                    per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-            else:
-                # Paid but no plan bound → default paid limits
-                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-
-        # ----------------------------
-        # Reset credits if the reset period has expired
-        # ----------------------------
-        reset_at = record.get("credits_reset_at")
-        if reset_at is not None and now_ts >= reset_at:
-            if tier == "free":
-                # Free keys get a fresh bucket of free credits
-                record["credits"] = FREE_TIER_MONTHLY_CREDITS
-                record["credits_reset_at"] = now_ts + SECONDS_PER_MONTH
-            else:
-                # Paid keys: if plan has monthly_credits, reset; otherwise unlimited
-                if plan_code:
-                    plan = next((p for p in PLANS if p["code"] == plan_code), None)
-                else:
-                    plan = None
-                if plan:
-                    mc = plan.get("monthly_credits")
-                    record["credits"] = mc
-                    # Unlimited credits → no next reset
-                    if mc is None:
-                        record["credits_reset_at"] = None
-                    else:
-                        record["credits_reset_at"] = now_ts + SECONDS_PER_MONTH
-                else:
-                    # Paid, no plan → unlimited credits, no reset
-                    record["credits"] = None
-                    record["credits_reset_at"] = None
-            modified = True
-
-        # ----------------------------
-        # Append usage entry for this key
-        # ----------------------------
-        usage.append(
-            {
-                "owner": record.get("owner"),
-                "active": record.get("active", True),
-                "tier": tier,
-                "plan_code": plan_code,
-                "remaining_credits": record.get("credits"),
-                # credits_reset_at remains as epoch seconds for internal use
-                "credits_reset_at": record.get("credits_reset_at"),
-                "rate_limits": {
-                    "per_minute": per_minute,
-                    "per_day": per_day,
-                },
-                "key_prefix": record.get("key_hash", "")[:8] + "…",
-                # Convert created_at/upgraded_at timestamps to ISO strings
-                "created_at": to_wat_iso(record.get("created_at")),
-                "upgraded_at": to_wat_iso(record.get("upgraded_at")),
-            }
-        )
-
-    # Persist any modifications (credit resets)
-    if modified:
-        save_keys(data)
-
-    return {"usage": usage}
-
-
-    # Note: ``admin_required`` is now defined above the usage endpoints to
-    # ensure it exists when referenced in dependency definitions.
-
-
-@app.get("/health", tags=["Utility"])
-def health() -> Dict[str, str]:
-    """Health check endpoint (no authentication required)."""
-    return {"status": "ok"}
-
-
-@app.get("/rate", tags=["Core"], response_model=Dict[str, Any])
+@app.get("/rate")
 def get_rate(
-    from_currency: str = Query(..., alias="from"),
-    to_currency: str = Query(..., alias="to"),
-    _: Dict[str, Any] = Depends(api_key_required),
-) -> Dict[str, Any]:
-    """Retrieve the conversion rate from one currency to another."""
-    from_lower = validate_currency(from_currency)
-    to_lower = validate_currency(to_currency)
+    from_currency: str = Query(..., alias="from", description="Base currency code"),
+    to_currency: str = Query(..., alias="to", description="Target currency code"),
+) -> dict:
+    """Return the conversion rate from one currency to another.
+
+    Example:
+        /rate?from=USD&to=NGN
+
+    Raises:
+        HTTPException: If the target currency is unsupported.
+    """
+    from_lower = from_currency.lower()
+    to_lower = to_currency.lower()
     rates = fetch_rates(from_lower)
     if to_lower not in rates:
         raise HTTPException(
             status_code=400,
-            detail=f"Target currency '{to_currency.upper()}' is not supported",
+            detail=f"Target currency '{to_currency.upper()}' is not supported.",
         )
+    rate = rates[to_lower]
     return {
         "from": from_currency.upper(),
         "to": to_currency.upper(),
-        "rate": rates[to_lower],
+        "rate": rate,
     }
 
 
-@app.get("/convert", tags=["Core"], response_model=Dict[str, Any])
+@app.get("/convert")
 def convert_currency(
-    from_currency: str = Query(..., alias="from"),
-    to_currency: str = Query(..., alias="to"),
-    amount: float = Query(...),
-    _: Dict[str, Any] = Depends(api_key_required),
-) -> Dict[str, Any]:
-    """Convert an amount from one currency to another."""
-    if amount < 0:
-        raise HTTPException(status_code=400, detail="Amount must be non‑negative")
-    from_lower = validate_currency(from_currency)
-    to_lower = validate_currency(to_currency)
+    from_currency: str = Query(..., alias="from", description="Base currency code"),
+    to_currency: str = Query(..., alias="to", description="Target currency code"),
+    amount: float = Query(..., description="Amount to convert"),
+) -> dict:
+    """Convert an amount from one currency into another.
+
+    Example:
+        /convert?from=EUR&to=USD&amount=50
+
+    Raises:
+        HTTPException: If the target currency is unsupported.
+    """
+    from_lower = from_currency.lower()
+    to_lower = to_currency.lower()
     rates = fetch_rates(from_lower)
     if to_lower not in rates:
         raise HTTPException(
             status_code=400,
-            detail=f"Target currency '{to_currency.upper()}' is not supported",
+            detail=f"Target currency '{to_currency.upper()}' is not supported.",
         )
     rate = rates[to_lower]
-    converted_amount = round(amount * rate, 4)
+    converted = amount * rate
     return {
         "from": from_currency.upper(),
         "to": to_currency.upper(),
         "amount": amount,
         "rate": rate,
-        "converted_amount": converted_amount,
+        "converted_amount": round(converted, 4),
     }
-
-
-@app.post("/auth/free-key", tags=["Auth"])
-def get_free_key() -> Dict[str, str]:
-    """Public endpoint to request a free‑tier API key."""
-    raw = generate_free_key()
-    return {
-        "tier": "free",
-        "api_key": raw,
-        "note": "Free keys have limited quota. Upgrade for higher limits.",
-    }
-
-
-@app.get("/plans", tags=["Billing"])
-def list_plans() -> Dict[str, Any]:
-    """Public endpoint to list available subscription plans."""
-    return {"plans": PLANS}
-
-
-@app.post("/billing/upgrade", tags=["Billing"], response_model=Dict[str, Any])
-def billing_upgrade(
-    payload: UpgradePayload,
-    key: Dict[str, Any] = Depends(api_key_required),
-) -> Dict[str, Any]:
-    """Start a Paystack transaction to upgrade a free key to a paid plan.
-
-    The caller must supply an email address and a plan_code that exists
-    in the ``PLANS`` list. The API key used for authentication will
-    determine which key is upgraded.
-    """
-    # Ensure the plan_code is valid
-    plan = next((p for p in PLANS if p["code"] == payload.plan_code), None)
-    if not plan:
-        raise HTTPException(status_code=400, detail="Unknown plan_code")
-    # Start Paystack transaction
-    auth_url, reference = initialize_transaction(
-        email=payload.email,
-        amount_naira=plan["price_naira"],
-        api_key_hash=key["key_hash"],
-        plan_code=payload.plan_code,
-    )
-    return {
-        "authorization_url": auth_url,
-        "reference": reference,
-        "plan": plan,
-    }
-
-
-@app.post("/paystack/webhook", status_code=status.HTTP_200_OK, tags=["Billing"])
-async def paystack_webhook(request: Request) -> Dict[str, str]:
-    """Handle Paystack webhook events for subscription management."""
-    body = await request.body()
-    signature = request.headers.get("x-paystack-signature")
-    if not verify_paystack_signature(body, signature):
-        raise HTTPException(status_code=400, detail="Invalid Paystack signature")
-    event_type, api_key_hash, plan_code = extract_webhook_info(body)
-    # Successful payment or subscription activation
-    if event_type in ("charge.success", "subscription.create", "subscription.enable"):
-        if api_key_hash and plan_code:
-            # Find the plan definition
-            plan = next((p for p in PLANS if p["code"] == plan_code), None)
-            if plan:
-                upgrade_key_tier_by_hash(
-                    key_hash=api_key_hash,
-                    new_tier="paid",
-                    plan=plan,
-                    free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
-                )
-    # Subscription disabled or invoice failed → downgrade to free
-    if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
-        if api_key_hash:
-            upgrade_key_tier_by_hash(
-                key_hash=api_key_hash,
-                new_tier="free",
-                plan=None,
-                free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
-            )
-    return {"status": "ok"}
-
-
-@app.post("/admin/generate-key", tags=["Admin"])
-def admin_generate_key(
-    payload: OwnerPayload,
-    _: bool = Depends(admin_required),
-) -> Dict[str, str]:
-    """Admin endpoint to generate a new paid API key."""
-    raw = generate_api_key(payload.owner)
-    return {"owner": payload.owner, "api_key": raw}
-
-
-@app.post("/admin/revoke-key", tags=["Admin"])
-def admin_revoke_key(
-    payload: RevokePayload,
-    _: bool = Depends(admin_required),
-) -> Dict[str, str]:
-    """Admin endpoint to revoke an existing API key."""
-    revoke_api_key(payload.api_key)
-    return {"status": "ok", "message": "API key revoked"}
-
-
-@app.get("/admin/keys", tags=["Admin"])
-def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
-    """Admin endpoint to list all API keys (with masked hashes)."""
-    data = load_keys()
-    keys_out = []
-    for key in data.get("keys", []):
-        keys_out.append(
-            {
-                "owner": key.get("owner"),
-                "active": key.get("active", True),
-                "tier": key.get("tier", "paid"),
-                "plan_code": key.get("plan_code"),
-                # Convert numeric timestamps to ISO strings for display
-                "created_at": to_wat_iso(key.get("created_at")),
-                "key_prefix": key.get("key_hash", "")[:8] + "…",
-            }
-        )
-    return {"keys": keys_out}
-
-
-@app.get("/openapi.json", include_in_schema=False)
-async def openapi_json(_: Dict[str, Any] = Depends(api_key_required)) -> JSONResponse:
-    """Serve the OpenAPI schema, protected by API key."""
-    global _cached_openapi
-    try:
-        _cached_openapi  # type: ignore
-    except NameError:
-        _cached_openapi = get_openapi(
-            title=app.title,
-            version=app.version,
-            description=app.description,
-            routes=app.routes,
-        )
-    return JSONResponse(_cached_openapi)
-
-
-@app.get("/docs", include_in_schema=False)
-async def swagger_docs(_: Dict[str, Any] = Depends(api_key_required)) -> HTMLResponse:
-    """Serve Swagger UI, protected by API key."""
-    return get_swagger_ui_html(
-        openapi_url="/openapi.json", title="Currency Conversion API Docs"
-    )
-
-# ---------------------------------------------------------------------------
-# Public documentation endpoints
-# ---------------------------------------------------------------------------
-
-# We expose a read‑only OpenAPI schema and docs without requiring an API key.
-# These endpoints are useful for developers exploring the API before obtaining
-# a key. They are intentionally excluded from the generated schema via
-# ``include_in_schema=False`` to avoid cluttering the spec with duplicate
-# entries.
-
-@app.get("/public/openapi.json", include_in_schema=False)
-async def public_openapi_json() -> JSONResponse:
-    """Serve the OpenAPI schema without authentication."""
-    global _public_openapi
-    try:
-        return JSONResponse(_public_openapi)  # type: ignore
-    except NameError:
-        _public_openapi = get_openapi(
-            title=app.title,
-            version=app.version,
-            description=app.description,
-            routes=app.routes,
-        )
-        return JSONResponse(_public_openapi)
-
-
-@app.get("/public/docs", include_in_schema=False)
-async def public_swagger_ui() -> HTMLResponse:
-    """Serve a public Swagger UI that does not require an API key."""
-    return get_swagger_ui_html(
-        title="Currency Conversion API Docs (Public)",
-        openapi_url="/public/openapi.json",
-        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js",
-        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css",
-    )
-
-
-@app.get("/public/redoc", include_in_schema=False)
-async def public_redoc() -> HTMLResponse:
-    """Serve a public ReDoc interface that does not require an API key."""
-    return get_redoc_html(
-        title="Currency Conversion API Docs (ReDoc)",
-        openapi_url="/public/openapi.json",
-    )
