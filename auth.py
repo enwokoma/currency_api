@@ -13,6 +13,7 @@ Keys are stored in ``keys.json`` with the following structure::
                 "created_at": 1700000000.0,
                 "plan_code": "..." | null,
                 "credits": int | null,
+                "credits_reset_at": 1700000000.0 | null,
                 "upgraded_at": 1700000000.0 | null
             },
             ...
@@ -46,8 +47,29 @@ from typing import Dict, Any, List, Optional
 
 from fastapi import HTTPException
 
+from datetime import datetime, timezone, timedelta
+
+# West Africa Time (UTC+1) timezone definition. Lagos does not observe DST.
+WAT = timezone(timedelta(hours=1))
+
+def now_wat_iso() -> str:
+    """Return current time in West Africa Time (Lagos) as ISO without timezone.
+
+    This returns a string formatted like ``YYYY-MM-DDTHH:MM:SS.mmm`` without
+    including the ``+01:00`` offset. It still represents local time in
+    Africa/Lagos, but omits the timezone suffix for readability.
+    """
+    # Get current time in WAT
+    dt = datetime.now(WAT)
+    # Remove timezone info for a cleaner representation
+    naive = dt.replace(tzinfo=None)
+    return naive.isoformat(timespec="milliseconds")
+
 # Location of the key store
 KEY_FILE = "keys.json"
+
+# Approximate number of seconds in a month for credit resets (30 days).
+SECONDS_PER_MONTH = 30 * 24 * 60 * 60
 
 # Ensure the key store exists
 if not os.path.exists(KEY_FILE):
@@ -89,9 +111,12 @@ def generate_api_key(owner: str) -> str:
             "owner": owner,
             "tier": "paid",
             "active": True,
-            "created_at": time.time(),
+            # Human‑readable creation time in WAT (ISO 8601 with ms)
+            "created_at": now_wat_iso(),
             "plan_code": None,
             "credits": None,
+            # No credits reset until a plan is applied
+            "credits_reset_at": None,
         }
     )
     save_keys(data)
@@ -109,15 +134,20 @@ def generate_free_key() -> str:
     hashed = hash_key(raw)
     data = load_keys()
     data.setdefault("keys", [])
+    # Free keys start with no plan and no credits. A credits reset timestamp
+    # is set to one month from now so that monthly quotas reset automatically.
     data["keys"].append(
         {
             "key_hash": hashed,
             "owner": "free-tier",
             "tier": "free",
             "active": True,
-            "created_at": time.time(),
+            # Human‑readable creation time in WAT
+            "created_at": now_wat_iso(),
             "plan_code": None,
+            # Credits are initialised on first use; reset timestamp is one month from now
             "credits": None,
+            "credits_reset_at": time.time() + SECONDS_PER_MONTH,
         }
     )
     save_keys(data)
@@ -192,12 +222,22 @@ def upgrade_key_tier_by_hash(
                 if plan is not None:
                     record["plan_code"] = plan.get("code")
                     record["credits"] = plan.get("monthly_credits")
-                record["upgraded_at"] = time.time()
+                    # Set the next reset time if the plan has finite credits
+                    if plan.get("monthly_credits") is not None:
+                        record["credits_reset_at"] = time.time() + SECONDS_PER_MONTH
+                    else:
+                        # Unlimited credits ⇒ no reset schedule
+                        record["credits_reset_at"] = None
+                # Record the upgrade timestamp in WAT for human readability
+                record["upgraded_at"] = now_wat_iso()
             elif new_tier == "free":
                 record["tier"] = "free"
                 record["plan_code"] = None
+                # Reset credits and set next reset timestamp for free tier
                 record["credits"] = free_monthly_credits
-                record["upgraded_at"] = time.time()
+                record["credits_reset_at"] = time.time() + SECONDS_PER_MONTH
+                # Record downgrade timestamp in WAT
+                record["upgraded_at"] = now_wat_iso()
             else:
                 raise HTTPException(status_code=400, detail="Invalid tier specified")
             save_keys(data)
@@ -232,15 +272,43 @@ def charge_call_for_key(
         tier = record.get("tier", "paid")
         credits = record.get("credits")
         plan_code = record.get("plan_code")
+
         # Identify plan if present
         plan = None
         if plan_code:
             plan = next((p for p in plans if p.get("code") == plan_code), None)
+
+        # Reset credits if the current period has expired
+        now = time.time()
+        reset_at = record.get("credits_reset_at")
+        if reset_at is not None and now >= reset_at:
+            if tier == "free":
+                # Reset free credits
+                record["credits"] = free_monthly_credits
+                record["credits_reset_at"] = now + SECONDS_PER_MONTH
+            else:
+                # Paid tier reset
+                if plan is not None:
+                    mc = plan.get("monthly_credits")
+                    record["credits"] = mc
+                    # Unlimited monthly credits => no reset schedule
+                    if mc is None:
+                        record["credits_reset_at"] = None
+                    else:
+                        record["credits_reset_at"] = now + SECONDS_PER_MONTH
+                else:
+                    # No plan → unlimited credits
+                    record["credits"] = None
+                    record["credits_reset_at"] = None
+            # Refresh credits variable after reset
+            credits = record.get("credits")
+
         # Free tier logic
         if tier == "free":
             # Initialise credits if none
             if credits is None:
                 credits = free_monthly_credits
+                record["credits"] = credits
             if credits <= 0:
                 raise HTTPException(
                     status_code=402,
@@ -257,6 +325,7 @@ def charge_call_for_key(
             # Initialise credits from plan if missing
             if credits is None:
                 credits = plan.get("monthly_credits")
+                record["credits"] = credits
             # If credits is None after plan, treat as unlimited
             if credits is None:
                 break

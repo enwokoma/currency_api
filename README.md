@@ -45,6 +45,7 @@ also set `ADMIN_TOKEN` in your environment. Use this token in the
 
 | Method & path | Description |
 |---------------|-------------|
+| `GET /me/usage` | Return remaining credits, rate limits and next reset for your key |
 | `GET /rate?from=USD&to=NGN` | Return the exchange rate from one currency to another |
 | `GET /convert?from=EUR&to=USD&amount=50` | Convert an amount from one currency to another |
 
@@ -69,6 +70,7 @@ also set `ADMIN_TOKEN` in your environment. Use this token in the
 | `POST /admin/generate-key` | Generate a new paid API key |
 | `POST /admin/revoke-key` | Revoke an existing API key |
 | `GET /admin/keys` | List all keys with metadata |
+| `GET /admin/usage` | Admin report: usage and limits for all keys |
 
 The API also exposes a health check at `/health` (no auth) and
 secured documentation at `/docs` and `/openapi.json` (API key
@@ -96,6 +98,14 @@ and `/public/openapi.json` that can be browsed without a key.
      key’s tier becomes `paid` and its plan code is stored. If
      subscription is disabled or a payment fails, the key downgrades
      back to free.
+
+5. **Monthly credit reset**:
+   Each API key has a monthly credit budget (free‑tier or plan‑specific).
+   Credits reset automatically every 30 days based on a `credits_reset_at`
+   timestamp stored in the key record. When the reset time is reached,
+   the service replenishes the key’s credits and moves the reset
+   timestamp forward. You can view your remaining credits and the
+   next reset date via `GET /me/usage`.
 
 ---
 

@@ -14,7 +14,40 @@ import os
 import time
 from typing import Dict, Any, Optional
 
-import orjson
+try:
+    # Attempt to import orjson and the high‑performance response class.
+    import orjson  # type: ignore
+    from fastapi.responses import ORJSONResponse
+except ImportError:
+    # If orjson is not available, fall back to the standard library JSON response.
+    import json  # standard library
+    from fastapi.responses import JSONResponse  # type: ignore
+    # Alias ORJSONResponse to JSONResponse so FastAPI will use it as the default
+    ORJSONResponse = JSONResponse  # type: ignore
+
+    class _FakeOrjson:
+        """
+        Simple shim to emulate a subset of the orjson API used by this
+        application. It avoids modifying the global ``json`` module and
+        provides ``dumps``/``loads`` compatibly. ``OPT_INDENT_2`` is
+        defined only for signature compatibility and is ignored.
+        """
+
+        OPT_INDENT_2 = None  # orjson option placeholder
+
+        @staticmethod
+        def dumps(obj, option=None):  # type: ignore
+            return json.dumps(obj).encode()
+
+        @staticmethod
+        def loads(b):  # type: ignore
+            if isinstance(b, (bytes, bytearray)):
+                b = b.decode()
+            return json.loads(b)
+
+    # Provide a fake orjson module so code using orjson.dumps/loads still works
+    orjson = _FakeOrjson()  # type: ignore
+
 from fastapi import (
     FastAPI,
     HTTPException,
@@ -25,7 +58,9 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse
+# Import JSONResponse and HTMLResponse only. ORJSONResponse is
+# conditionally aliased above based on the availability of orjson.
+from fastapi.responses import JSONResponse, HTMLResponse  # noqa: F401
 from fastapi.openapi.utils import get_openapi
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
@@ -39,6 +74,7 @@ from auth import (
     load_keys,
     upgrade_key_tier_by_hash,
     charge_call_for_key,
+    SECONDS_PER_MONTH,
 )
 from rate_limit import allow_request
 from utils import validate_currency, fetch_rates
@@ -48,8 +84,13 @@ from billing import (
     extract_webhook_info,
 )
 
-from dotenv import load_dotenv
-load_dotenv()
+# Try to load environment variables from a .env file if python-dotenv is installed.
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except ImportError:
+    # python‑dotenv is optional; environment variables can still be provided
+    pass
 
 
 # The admin token for key management. This is loaded from the
@@ -72,7 +113,7 @@ def _load_or_create_admin_token() -> str:
     # Otherwise generate a new secure token and save it
     import secrets
 
-    token = "admin_token_" + secrets.token_hex(16)
+    token = "admtok_" + secrets.token_hex(16)
     with open(ADMIN_FILE, "w", encoding="utf-8") as fh:
         fh.write(token)
     print(
@@ -118,6 +159,41 @@ PLANS = [
 FREE_REQUESTS_PER_MINUTE = 10
 FREE_REQUESTS_PER_DAY = 200
 FREE_TIER_MONTHLY_CREDITS = 200
+
+# Default paid limits for keys that are tier='paid' but have no plan_code
+# These limits are applied to admin-generated keys and any paid key that
+# is not yet subscribed to a plan. They reflect the baseline of our
+# Basic plan (100 calls per minute, 10k per day).
+DEFAULT_PAID_REQUESTS_PER_MINUTE = 100
+DEFAULT_PAID_REQUESTS_PER_DAY = 10_000
+
+
+# ---------------------------------------------------------------------------
+# Helpers for timestamp conversion
+# ---------------------------------------------------------------------------
+# Define West Africa Time (UTC+1) timezone for converting numeric timestamps.
+from datetime import datetime, timezone, timedelta
+
+# West Africa Time (Lagos) does not observe daylight savings.
+WAT = timezone(timedelta(hours=1))
+
+def to_wat_iso(value: Any) -> Any:
+    """
+    Convert a numeric timestamp (epoch) to a West Africa Time ISO string without timezone.
+
+    If ``value`` is a float or int representing seconds since the UNIX epoch,
+    it will be converted to a ``datetime`` in the WAT timezone, then the
+    timezone information will be removed before converting to ISO 8601 format
+    with millisecond precision. This omits the ``+01:00`` suffix for a
+    cleaner display while still representing Africa/Lagos local time.
+
+    Non-numeric values are returned unchanged.
+    """
+    if isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(value, WAT)
+        naive = dt.replace(tzinfo=None)
+        return naive.isoformat(timespec="milliseconds")
+    return value
 
 
 # Pydantic models for request bodies
@@ -197,18 +273,28 @@ def api_key_required(request: Request) -> Dict[str, Any]:
     key_record = validate_api_key(raw_key)
     tier = key_record.get("tier", "paid")
     plan_code = key_record.get("plan_code")
-    # Determine rate limits based on tier/plan
-    if tier == "free" or not plan_code:
+    # Determine rate limits based on tier and plan.
+    # Free tier keys always use free limits. Paid keys use plan limits if
+    # available, otherwise default to the paid defaults. We do not treat
+    # paid keys with no plan_code as free.
+    if tier == "free":
         per_minute = FREE_REQUESTS_PER_MINUTE
         per_day = FREE_REQUESTS_PER_DAY
     else:
-        plan = next((p for p in PLANS if p["code"] == plan_code), None)
-        if plan:
-            per_minute = plan.get("requests_per_minute", 100)
-            per_day = plan.get("requests_per_day", 10_000)
+        # Paid tier
+        if plan_code:
+            plan = next((p for p in PLANS if p["code"] == plan_code), None)
+            if plan:
+                per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
+                per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
+            else:
+                # Unknown plan code → use default paid limits
+                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
+                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
         else:
-            per_minute = 100
-            per_day = 10_000
+            # No plan bound → default paid limits
+            per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
+            per_day = DEFAULT_PAID_REQUESTS_PER_DAY
     # Enforce rate limits
     allow_request(
         key_hash=key_record["key_hash"],
@@ -224,14 +310,211 @@ def api_key_required(request: Request) -> Dict[str, Any]:
     return key_record
 
 
-# Dependency: enforce admin token on admin endpoints
+# ---------------------------------------------------------------------------
+# Utility and admin authentication dependencies
+# ---------------------------------------------------------------------------
+
 def admin_required(request: Request) -> bool:
-    token = request.headers.get("X-ADMIN-TOKEN") or request.query_params.get(
+    """Validate the admin token for protected admin endpoints.
+
+    The expected admin token is determined dynamically. If an
+    ``ADMIN_TOKEN`` environment variable is set, it takes priority.
+    Otherwise, the module-level ``ADMIN_TOKEN`` value (generated or
+    loaded from ``admin_token.txt``) is used. This allows tests to
+    override the admin token via environment variables even after the
+    app has been imported.
+    """
+    provided = request.headers.get("X-ADMIN-TOKEN") or request.query_params.get(
         "admin_token"
     )
-    if token != ADMIN_TOKEN:
+    # Determine the expected token: prefer environment variable, else fallback
+    expected = os.getenv("ADMIN_TOKEN") or ADMIN_TOKEN
+    if provided != expected:
         raise HTTPException(status_code=403, detail="Invalid admin token")
     return True
+
+# ---------------------------------------------------------------------------
+# Usage information endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/me/usage", tags=["Usage"])  # new endpoint
+def get_usage(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]:
+    """Return remaining credits and rate limits for the caller's API key.
+
+    This endpoint does not consume credits. It resets credits if the
+    current period has expired.
+    """
+    # Determine tier and plan
+    tier = key.get("tier", "paid")
+    plan_code = key.get("plan_code")
+    # Compute rate limits consistent with api_key_required
+    if tier == "free":
+        per_minute = FREE_REQUESTS_PER_MINUTE
+        per_day = FREE_REQUESTS_PER_DAY
+        plan_info: Optional[Dict[str, Any]] = None
+    else:
+        if plan_code:
+            plan_info = next((p for p in PLANS if p["code"] == plan_code), None)
+            if plan_info:
+                per_minute = plan_info.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
+                per_day = plan_info.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
+            else:
+                plan_info = None
+                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
+                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
+        else:
+            plan_info = None
+            per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
+            per_day = DEFAULT_PAID_REQUESTS_PER_DAY
+    # Reset credits if needed and compute remaining credits
+    now = time.time()
+    # Load keys to update if necessary
+    # Import from the local auth module to avoid circular references
+    from auth import load_keys, save_keys
+    data = load_keys()
+    credits = None
+    next_reset = None
+    for record in data.get("keys", []):
+        if record.get("key_hash") == key["key_hash"]:
+            # Reset if expired
+            reset_at = record.get("credits_reset_at")
+            if reset_at is not None and now >= reset_at:
+                # Determine plan again
+                plan = None
+                if plan_code:
+                    plan = next((p for p in PLANS if p["code"] == plan_code), None)
+                if tier == "free":
+                    record["credits"] = FREE_TIER_MONTHLY_CREDITS
+                    record["credits_reset_at"] = now + SECONDS_PER_MONTH
+                else:
+                    if plan:
+                        mc = plan.get("monthly_credits")
+                        record["credits"] = mc
+                        if mc is None:
+                            record["credits_reset_at"] = None
+                        else:
+                            record["credits_reset_at"] = now + SECONDS_PER_MONTH
+                    else:
+                        record["credits"] = None
+                        record["credits_reset_at"] = None
+                save_keys(data)
+            credits = record.get("credits")
+            next_reset = record.get("credits_reset_at")
+            break
+    return {
+        "tier": tier,
+        "plan_code": plan_code,
+        "rate_limits": {"per_minute": per_minute, "per_day": per_day},
+        "remaining_credits": credits,
+        "credits_reset_at": next_reset,
+    }
+
+
+@app.get("/admin/usage", tags=["Admin"])  # new admin endpoint
+def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
+    """Return usage statistics for all API keys.
+
+    This endpoint provides an overview of every key's remaining credits,
+    reset timestamp and current rate limits. It also performs credit
+    resets when the ``credits_reset_at`` timestamp has passed. Using
+    floats for timestamps ensures correct comparisons against the
+    current time.
+    """
+    # Import here to avoid circular references. Use relative import because
+    # this module is part of the same package. Without the leading dot,
+    # FastAPI may import the wrong module or raise ModuleNotFoundError in
+    # certain contexts (e.g., tests running from outside the package).
+    from auth import load_keys, save_keys
+
+    data = load_keys()
+    now_ts = time.time()  # current epoch time
+    usage: list[Dict[str, Any]] = []
+    modified = False
+    for record in data.get("keys", []):
+        tier = record.get("tier", "paid")
+        plan_code = record.get("plan_code")
+        # ----------------------------
+        # Determine per-minute and per-day limits
+        # ----------------------------
+        if tier == "free":
+            per_minute = FREE_REQUESTS_PER_MINUTE
+            per_day = FREE_REQUESTS_PER_DAY
+        else:
+            if plan_code:
+                plan = next((p for p in PLANS if p["code"] == plan_code), None)
+                if plan:
+                    per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
+                    per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
+                else:
+                    # Unknown plan → default paid limits
+                    per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
+                    per_day = DEFAULT_PAID_REQUESTS_PER_DAY
+            else:
+                # Paid but no plan bound → default paid limits
+                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
+                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
+
+        # ----------------------------
+        # Reset credits if the reset period has expired
+        # ----------------------------
+        reset_at = record.get("credits_reset_at")
+        if reset_at is not None and now_ts >= reset_at:
+            if tier == "free":
+                # Free keys get a fresh bucket of free credits
+                record["credits"] = FREE_TIER_MONTHLY_CREDITS
+                record["credits_reset_at"] = now_ts + SECONDS_PER_MONTH
+            else:
+                # Paid keys: if plan has monthly_credits, reset; otherwise unlimited
+                if plan_code:
+                    plan = next((p for p in PLANS if p["code"] == plan_code), None)
+                else:
+                    plan = None
+                if plan:
+                    mc = plan.get("monthly_credits")
+                    record["credits"] = mc
+                    # Unlimited credits → no next reset
+                    if mc is None:
+                        record["credits_reset_at"] = None
+                    else:
+                        record["credits_reset_at"] = now_ts + SECONDS_PER_MONTH
+                else:
+                    # Paid, no plan → unlimited credits, no reset
+                    record["credits"] = None
+                    record["credits_reset_at"] = None
+            modified = True
+
+        # ----------------------------
+        # Append usage entry for this key
+        # ----------------------------
+        usage.append(
+            {
+                "owner": record.get("owner"),
+                "active": record.get("active", True),
+                "tier": tier,
+                "plan_code": plan_code,
+                "remaining_credits": record.get("credits"),
+                # credits_reset_at remains as epoch seconds for internal use
+                "credits_reset_at": record.get("credits_reset_at"),
+                "rate_limits": {
+                    "per_minute": per_minute,
+                    "per_day": per_day,
+                },
+                "key_prefix": record.get("key_hash", "")[:8] + "…",
+                # Convert created_at/upgraded_at timestamps to ISO strings
+                "created_at": to_wat_iso(record.get("created_at")),
+                "upgraded_at": to_wat_iso(record.get("upgraded_at")),
+            }
+        )
+
+    # Persist any modifications (credit resets)
+    if modified:
+        save_keys(data)
+
+    return {"usage": usage}
+
+
+    # Note: ``admin_required`` is now defined above the usage endpoints to
+    # ensure it exists when referenced in dependency definitions.
 
 
 @app.get("/health", tags=["Utility"])
@@ -401,7 +684,8 @@ def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                 "active": key.get("active", True),
                 "tier": key.get("tier", "paid"),
                 "plan_code": key.get("plan_code"),
-                "created_at": key.get("created_at"),
+                # Convert numeric timestamps to ISO strings for display
+                "created_at": to_wat_iso(key.get("created_at")),
                 "key_prefix": key.get("key_hash", "")[:8] + "…",
             }
         )
