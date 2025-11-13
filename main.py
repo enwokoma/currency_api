@@ -38,6 +38,7 @@ from auth import (
     revoke_api_key,
     load_keys,
     upgrade_key_tier_by_hash,
+    charge_call_for_key,
 )
 from rate_limit import allow_request
 from utils import validate_currency, fetch_rates
@@ -99,6 +100,7 @@ PLANS = [
         "currency": "NGN",
         "requests_per_minute": 100,
         "requests_per_day": 10_000,
+        "monthly_credits": 5000,   # total billable calls per billing period
     },
     {
         "code": "PRO_MONTHLY",
@@ -107,8 +109,14 @@ PLANS = [
         "currency": "NGN",
         "requests_per_minute": 300,
         "requests_per_day": 50_000,
+        "monthly_credits": 20000,   # total billable calls per billing period
     },
 ]
+
+# Free-tier limits and credits
+FREE_REQUESTS_PER_MINUTE = 10
+FREE_REQUESTS_PER_DAY = 200
+FREE_TIER_MONTHLY_CREDITS = 200  # total billable calls for free-tier keys
 
 
 # Pydantic models for request bodies
@@ -176,12 +184,50 @@ async def prettify_json(request: Request, call_next):
 
 # Dependency: enforce API key presence and rate limiting
 def api_key_required(request: Request) -> Dict[str, Any]:
+    """
+    Resolve the calling key, apply per-plan rate limits, and charge credits.
+
+    - FREE tier:
+        * Uses FREE_REQUESTS_PER_MINUTE / FREE_REQUESTS_PER_DAY.
+        * Uses FREE_TIER_MONTHLY_CREDITS via charge_call_for_key.
+    - PAID tier:
+        * Uses limits from the plan in PLANS.
+        * Uses monthly_credits from the plan (if defined).
+    """
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
     key_record = validate_api_key(raw_key)
-    # Determine tier and plan
+
     tier = key_record.get("tier", "paid")
     plan_code = key_record.get("plan_code")
-    allow_request(key_record["key_hash"], tier=tier, plan_code=plan_code)
+
+    # Determine numeric rate limits
+    if tier == "free" or not plan_code:
+        per_minute = FREE_REQUESTS_PER_MINUTE
+        per_day = FREE_REQUESTS_PER_DAY
+    else:
+        plan = next((p for p in PLANS if p["code"] == plan_code), None)
+        if plan:
+            per_minute = plan.get("requests_per_minute", 100)
+            per_day = plan.get("requests_per_day", 10_000)
+        else:
+            # Fallback limits if plan not found
+            per_minute = 100
+            per_day = 10_000
+
+    # Enforce rate limits
+    allow_request(
+        key_hash=key_record["key_hash"],
+        per_minute=per_minute,
+        per_day=per_day,
+    )
+
+    # Charge credits (per-call credit system)
+    charge_call_for_key(
+        key_record=key_record,
+        free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+        plans=PLANS,
+    )
+
     return key_record
 
 
@@ -305,15 +351,33 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
     signature = request.headers.get("x-paystack-signature")
     if not verify_paystack_signature(body, signature):
         raise HTTPException(status_code=400, detail="Invalid Paystack signature")
+
     event_type, api_key_hash, plan_code = extract_webhook_info(body)
-    # Successful subscription or charge events should upgrade the key to paid
+
+    # Handle successful payment / subscription activation
     if event_type in ("charge.success", "subscription.create", "subscription.enable"):
         if api_key_hash and plan_code:
-            upgrade_key_tier_by_hash(api_key_hash, new_tier="paid", plan_code=plan_code)
-    # Disabled or failed subscriptions should downgrade the key to free
+            plan = next((p for p in PLANS if p["code"] == plan_code), None)
+            if plan:
+                # Upgrade to paid, bind plan and reset credits to plan.monthly_credits
+                upgrade_key_tier_by_hash(
+                    key_hash=api_key_hash,
+                    new_tier="paid",
+                    plan=plan,
+                    free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+                )
+
+    # Handle subscription cancellation / disable / repeated failure
     if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
         if api_key_hash:
-            upgrade_key_tier_by_hash(api_key_hash, new_tier="free", plan_code=None)
+            # Downgrade back to free tier and reset to free-tier credits
+            upgrade_key_tier_by_hash(
+                key_hash=api_key_hash,
+                new_tier="free",
+                plan=None,
+                free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+            )
+
     return {"status": "ok"}
 
 
