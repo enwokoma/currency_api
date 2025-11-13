@@ -27,7 +27,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse
 from fastapi.openapi.utils import get_openapi
-from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
 from pydantic import BaseModel
 
@@ -377,4 +377,43 @@ async def swagger_docs(_: Dict[str, Any] = Depends(api_key_required)) -> HTMLRes
     """Serve Swagger UI, protected by API key."""
     return get_swagger_ui_html(
         openapi_url="/openapi.json", title="Currency Conversion API Docs"
+    )
+
+
+@app.get("/public/openapi.json", include_in_schema=False)
+async def public_openapi():
+    global _public_openapi
+    try:
+        return JSONResponse(_public_openapi)
+    except NameError:
+        _public_openapi = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        return JSONResponse(_public_openapi)
+
+
+# ------------------------------
+# Public Swagger UI (built-in)
+# ------------------------------
+@app.get("/public/docs", include_in_schema=False)
+async def custom_swagger_ui():
+    return get_swagger_ui_html(
+        title="Public API Docs - Swagger UI",
+        openapi_url="/public/openapi.json",
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css",
+    )
+
+
+# ------------------------------
+# Public ReDoc (built-in)
+# ------------------------------
+@app.get("/public/redoc", include_in_schema=False)
+async def custom_redoc():
+    return get_redoc_html(
+        title="Public API Docs - ReDoc",
+        openapi_url="/public/openapi.json",
     )
