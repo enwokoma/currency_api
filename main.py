@@ -19,8 +19,16 @@ from auth import (
 from rate_limit import allow_request
 from utils import validate_currency, fetch_rates
 
-ADMIN_FILE = "admin_token.txt"
+from pydantic import BaseModel
 
+class OwnerPayload(BaseModel):
+    owner: str
+
+class RevokePayload(BaseModel):
+    api_key: str
+
+
+ADMIN_FILE = "admin_token.txt"
 
 def load_or_create_admin_token():
     # If token exists already, read it
@@ -181,14 +189,14 @@ def convert_currency(
 # ==================================================================
 
 @app.post("/admin/generate-key")
-def admin_generate_key(owner: str = Body(...), _: bool = Depends(admin_required)):
-    raw = generate_api_key(owner)
-    return {"owner": owner, "api_key": raw}
+def admin_generate_key(payload: OwnerPayload, _: bool = Depends(admin_required)):
+    raw = generate_api_key(payload.owner)
+    return {"owner": payload.owner, "api_key": raw}
 
 
 @app.post("/admin/revoke-key")
-def admin_revoke_key(api_key: str = Body(...), _: bool = Depends(admin_required)):
-    revoke_api_key(api_key)
+def admin_revoke_key(payload: RevokePayload, _: bool = Depends(admin_required)):
+    revoke_api_key(payload.api_key)
     return {"status": "ok", "message": "API key revoked"}
 
 
