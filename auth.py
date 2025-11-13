@@ -1,17 +1,41 @@
 """
 Authentication and API key management for the currency conversion service.
 
-Keys are stored in `keys.json` with the following fields:
+Keys are stored in ``keys.json`` with the following structure::
 
-- key_hash: SHA-256 hash of the raw API key
-- owner: who owns / uses the key
-- tier: "free" or "paid"
-- active: whether the key is usable
-- created_at: timestamp of creation
-- plan_code: code of the paid plan (for paid keys)
-- credits: remaining credits (decremented per API call)
-- upgraded_at: when the key was last upgraded (optional)
+    {
+        "keys": [
+            {
+                "key_hash": "...",    # SHA‑256 hash of the raw key
+                "owner": "...",      # Owner name (admin‑generated or free)
+                "tier": "free" | "paid",
+                "active": true | false,
+                "created_at": 1700000000.0,
+                "plan_code": "..." | null,
+                "credits": int | null,
+                "upgraded_at": 1700000000.0 | null
+            },
+            ...
+        ]
+    }
+
+Free keys and paid keys behave differently:
+
+* **Free keys**: tier="free", plan_code=None. Credits are initialised
+  to ``free_monthly_credits`` on first use. Each API call decrements
+  credits. When credits are exhausted, the key cannot be used until
+  upgraded to a paid plan.
+* **Paid keys**: tier="paid". If ``plan_code`` and ``monthly_credits``
+  are defined for the plan, credits are initialised from the plan's
+  monthly credits. Each API call decrements credits. If credits are
+  exhausted, the user must renew or upgrade their plan. If
+  ``credits`` is None, the key has unlimited billable calls.
+
+Functions provided here handle generation of keys, validation,
+revocation, tier upgrades/downgrades, and credit consumption.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -22,45 +46,41 @@ from typing import Dict, Any, List, Optional
 
 from fastapi import HTTPException
 
+# Location of the key store
 KEY_FILE = "keys.json"
 
-# Ensure keys file exists
+# Ensure the key store exists
 if not os.path.exists(KEY_FILE):
-    with open(KEY_FILE, "w", encoding="utf-8") as f:
-        json.dump({"keys": []}, f, indent=2)
+    with open(KEY_FILE, "w", encoding="utf-8") as fh:
+        json.dump({"keys": []}, fh, indent=2)
 
-
-# ------------------------------------------
-# Low-level helpers
-# ------------------------------------------
 
 def load_keys() -> Dict[str, Any]:
-    with open(KEY_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Load the keys JSON document from disk."""
+    with open(KEY_FILE, "r", encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 def save_keys(data: Dict[str, Any]) -> None:
-    with open(KEY_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    """Persist the keys JSON document to disk."""
+    with open(KEY_FILE, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
 
 
 def hash_key(raw_key: str) -> str:
+    """Compute the SHA‑256 hash of a raw API key."""
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
-# ------------------------------------------
-# Key generation
-# ------------------------------------------
-
 def generate_api_key(owner: str) -> str:
-    """
-    Generate a PAID key (usually via admin endpoint).
-    Paid keys default to tier='paid' and unlimited credits (credits=None)
-    until they are bound to a plan via Paystack upgrade.
+    """Create a new paid API key.
+
+    The returned value is the raw key (UUID). Only its hash is stored
+    on disk. Paid keys default to unlimited credits until a plan is
+    applied via subscription upgrade.
     """
     raw = str(uuid.uuid4())
     hashed = hash_key(raw)
-
     data = load_keys()
     data.setdefault("keys", [])
     data["keys"].append(
@@ -75,18 +95,18 @@ def generate_api_key(owner: str) -> str:
         }
     )
     save_keys(data)
-
     return raw
 
 
 def generate_free_key() -> str:
-    """
-    Generate a FREE key, with an initial 'free' tier and no plan_code.
-    Credits will be initialised by the charging logic based on config.
+    """Create a new free API key.
+
+    Free keys have a distinctive prefix and start with no plan or
+    credits. Credits will be initialised on first use when charging
+    occurs.
     """
     raw = "free_" + uuid.uuid4().hex[:16]
     hashed = hash_key(raw)
-
     data = load_keys()
     data.setdefault("keys", [])
     data["keys"].append(
@@ -97,57 +117,47 @@ def generate_free_key() -> str:
             "active": True,
             "created_at": time.time(),
             "plan_code": None,
-            "credits": None,  # set later based on free-tier config
+            "credits": None,
         }
     )
     save_keys(data)
-
     return raw
 
 
-# ------------------------------------------
-# Validation / Revocation
-# ------------------------------------------
-
 def validate_api_key(raw_key: Optional[str]) -> Dict[str, Any]:
+    """Validate a raw API key and return its record.
+
+    Raises ``HTTPException`` if the key is missing, invalid or
+    revoked. Always returns a copy of the record with ``key_hash``
+    attached.
+    """
     if not raw_key:
         raise HTTPException(status_code=401, detail="Missing API Key")
-
     hashed = hash_key(raw_key)
     data = load_keys()
-    for key in data.get("keys", []):
-        if key.get("key_hash") == hashed:
-            if not key.get("active", True):
+    for record in data.get("keys", []):
+        if record.get("key_hash") == hashed:
+            if not record.get("active", True):
                 raise HTTPException(status_code=403, detail="API key has been revoked")
-
-            # Ensure defaults for backward compatibility
-            key.setdefault("tier", "paid")
-            key.setdefault("plan_code", None)
-
-            # Attach key_hash so callers don't need to compute it again
-            key_copy = dict(key)
-            key_copy["key_hash"] = hashed
-            return key_copy
-
+            # Default missing tier to paid for legacy keys
+            record.setdefault("tier", "paid")
+            record_copy = dict(record)
+            record_copy["key_hash"] = hashed
+            return record_copy
     raise HTTPException(status_code=401, detail="Invalid API Key")
 
 
 def revoke_api_key(raw_key: str) -> None:
+    """Revoke a key so it can no longer be used."""
     hashed = hash_key(raw_key)
     data = load_keys()
-
-    for key in data.get("keys", []):
-        if key.get("key_hash") == hashed:
-            key["active"] = False
+    for record in data.get("keys", []):
+        if record.get("key_hash") == hashed:
+            record["active"] = False
             save_keys(data)
             return
-
     raise HTTPException(status_code=404, detail="API key not found")
 
-
-# ------------------------------------------
-# Tier upgrades / downgrades (Paystack driven)
-# ------------------------------------------
 
 def upgrade_key_tier_by_hash(
     key_hash: str,
@@ -155,80 +165,80 @@ def upgrade_key_tier_by_hash(
     plan: Optional[Dict[str, Any]] = None,
     free_monthly_credits: int = 200,
 ) -> Dict[str, Any]:
-    """
-    Update a key's tier and plan_code based on Paystack events.
+    """Upgrade or downgrade a key based on subscription events.
 
-    - If new_tier == "paid" and a plan is provided, the key becomes paid,
-      plan_code is set, and credits are reset to the plan's monthly_credits.
-    - If new_tier == "free", the key is downgraded to free tier, plan_code is
-      cleared, and credits are reset to the free-tier monthly credits.
-    """
+    * When ``new_tier`` is ``"paid"`` and a plan dict is provided,
+      ``tier`` is set to ``"paid"``, ``plan_code`` is set from the plan,
+      ``credits`` is reset to ``plan["monthly_credits"]`` (or left as
+      unlimited if not provided).
+    * When ``new_tier`` is ``"free"``, ``tier`` becomes ``"free"``,
+      ``plan_code`` is cleared, and ``credits`` is reset to
+      ``free_monthly_credits``.
 
+    Args:
+        key_hash: The hash of the key to modify.
+        new_tier: "free" or "paid".
+        plan: Plan definition dict used when upgrading to paid.
+        free_monthly_credits: Credits assigned to free tier on reset.
+
+    Returns:
+        The updated key record.
+    """
     data = load_keys()
-    keys = data.get("keys", [])
-    for key in keys:
-        if key.get("key_hash") == key_hash:
+    for record in data.get("keys", []):
+        if record.get("key_hash") == key_hash:
             if new_tier == "paid":
-                key["tier"] = "paid"
+                record["tier"] = "paid"
                 if plan is not None:
-                    key["plan_code"] = plan.get("code")
-                    key["credits"] = plan.get("monthly_credits")
-                key["upgraded_at"] = time.time()
+                    record["plan_code"] = plan.get("code")
+                    record["credits"] = plan.get("monthly_credits")
+                record["upgraded_at"] = time.time()
             elif new_tier == "free":
-                key["tier"] = "free"
-                key["plan_code"] = None
-                key["credits"] = free_monthly_credits
-                key["upgraded_at"] = time.time()
+                record["tier"] = "free"
+                record["plan_code"] = None
+                record["credits"] = free_monthly_credits
+                record["upgraded_at"] = time.time()
             else:
                 raise HTTPException(status_code=400, detail="Invalid tier specified")
-
             save_keys(data)
-            return key
-
+            return record
     raise HTTPException(status_code=404, detail="Key not found for upgrade")
 
-
-# ------------------------------------------
-# Credits charging per API call
-# ------------------------------------------
 
 def charge_call_for_key(
     key_record: Dict[str, Any],
     free_monthly_credits: int,
     plans: List[Dict[str, Any]],
 ) -> None:
-    """
-    Decrement the 'credits' counter for a given key.
+    """Decrement the credits counter for a given key.
 
-    - FREE tier: credits are initialised to free_monthly_credits if missing.
-    - PAID tier: credits are initialised from the plan's monthly_credits if
-      missing and the key has a valid plan_code.
-    - Keys with credits=None are treated as having unlimited credits.
+    This method ensures that free keys and paid keys consume
+    'billable' credits appropriately. If credits go to zero, an
+    ``HTTPException`` with status 402 is raised.
 
-    Raises HTTPException(402) when no credits are left.
+    Args:
+        key_record: The validated key record from ``validate_api_key``.
+        free_monthly_credits: Number of calls allowed per month for free keys.
+        plans: The list of plan definitions used to find plan info.
     """
     key_hash = key_record.get("key_hash")
     if not key_hash:
         raise HTTPException(status_code=500, detail="Key hash missing from record")
-
     data = load_keys()
     updated = False
-
-    for key in data.get("keys", []):
-        if key.get("key_hash") != key_hash:
+    for record in data.get("keys", []):
+        if record.get("key_hash") != key_hash:
             continue
-
-        tier = key.get("tier", "paid")
-        credits = key.get("credits", None)
-
-        # Determine applicable plan (if any)
+        tier = record.get("tier", "paid")
+        credits = record.get("credits")
+        plan_code = record.get("plan_code")
+        # Identify plan if present
         plan = None
-        plan_code = key.get("plan_code")
         if plan_code:
             plan = next((p for p in plans if p.get("code") == plan_code), None)
-
-        # FREE TIER
+        # Free tier logic
         if tier == "free":
+            # Initialise credits if none
             if credits is None:
                 credits = free_monthly_credits
             if credits <= 0:
@@ -237,31 +247,27 @@ def charge_call_for_key(
                     detail="Free-tier credits exhausted. Please upgrade your plan.",
                 )
             credits -= 1
-            key["credits"] = credits
+            record["credits"] = credits
             updated = True
-
-        # PAID TIER
         else:
-            # No plan bound => treat as unlimited
+            # Paid tier logic
+            # No plan: unlimited credits
             if plan is None:
-                return
-
+                break
+            # Initialise credits from plan if missing
             if credits is None:
                 credits = plan.get("monthly_credits")
-            # monthly_credits may be None => unlimited
+            # If credits is None after plan, treat as unlimited
             if credits is None:
-                return
-
+                break
             if credits <= 0:
                 raise HTTPException(
                     status_code=402,
                     detail="Subscription credits exhausted. Please renew or upgrade.",
                 )
             credits -= 1
-            key["credits"] = credits
+            record["credits"] = credits
             updated = True
-
         break
-
     if updated:
         save_keys(data)

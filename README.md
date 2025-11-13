@@ -72,7 +72,8 @@ also set `ADMIN_TOKEN` in your environment. Use this token in the
 
 The API also exposes a health check at `/health` (no auth) and
 secured documentation at `/docs` and `/openapi.json` (API key
-required).
+required), plus public documentation at `/public/docs`, `/public/redoc`
+and `/public/openapi.json` that can be browsed without a key.
 
 ---
 

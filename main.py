@@ -89,9 +89,10 @@ ADMIN_TOKEN = _load_or_create_admin_token()
 
 
 # Subscription plans. Update this list to match the plans created in
-# your Paystack dashboard. Each plan defines the price in Naira and
-# the rate limits (per minute and per day). These limits are applied
-# automatically when a key has the corresponding plan code.
+# your Paystack dashboard. Each plan defines the price in Naira, the
+# rate limits (per minute and per day), and the monthly credits
+# (billable calls) available on the plan. ``monthly_credits`` can be
+# None to indicate unlimited billable calls.
 PLANS = [
     {
         "code": "BASIC_MONTHLY",
@@ -100,7 +101,7 @@ PLANS = [
         "currency": "NGN",
         "requests_per_minute": 100,
         "requests_per_day": 10_000,
-        "monthly_credits": 5000,   # total billable calls per billing period
+        "monthly_credits": 5000,
     },
     {
         "code": "PRO_MONTHLY",
@@ -109,14 +110,14 @@ PLANS = [
         "currency": "NGN",
         "requests_per_minute": 300,
         "requests_per_day": 50_000,
-        "monthly_credits": 20000,   # total billable calls per billing period
+        "monthly_credits": 20_000,
     },
 ]
 
 # Free-tier limits and credits
 FREE_REQUESTS_PER_MINUTE = 10
 FREE_REQUESTS_PER_DAY = 200
-FREE_TIER_MONTHLY_CREDITS = 200  # total billable calls for free-tier keys
+FREE_TIER_MONTHLY_CREDITS = 200
 
 
 # Pydantic models for request bodies
@@ -184,23 +185,19 @@ async def prettify_json(request: Request, call_next):
 
 # Dependency: enforce API key presence and rate limiting
 def api_key_required(request: Request) -> Dict[str, Any]:
-    """
-    Resolve the calling key, apply per-plan rate limits, and charge credits.
+    """Resolve the calling key, enforce rate limits and charge credits.
 
-    - FREE tier:
-        * Uses FREE_REQUESTS_PER_MINUTE / FREE_REQUESTS_PER_DAY.
-        * Uses FREE_TIER_MONTHLY_CREDITS via charge_call_for_key.
-    - PAID tier:
-        * Uses limits from the plan in PLANS.
-        * Uses monthly_credits from the plan (if defined).
+    For free tier keys, uses ``FREE_REQUESTS_PER_MINUTE``,
+    ``FREE_REQUESTS_PER_DAY`` and ``FREE_TIER_MONTHLY_CREDITS``.
+    For paid keys, derives limits and credits from the plan. If no
+    plan is bound, defaults to the Basic limits (100/min, 10k/day) and
+    unlimited credits.
     """
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
     key_record = validate_api_key(raw_key)
-
     tier = key_record.get("tier", "paid")
     plan_code = key_record.get("plan_code")
-
-    # Determine numeric rate limits
+    # Determine rate limits based on tier/plan
     if tier == "free" or not plan_code:
         per_minute = FREE_REQUESTS_PER_MINUTE
         per_day = FREE_REQUESTS_PER_DAY
@@ -210,24 +207,20 @@ def api_key_required(request: Request) -> Dict[str, Any]:
             per_minute = plan.get("requests_per_minute", 100)
             per_day = plan.get("requests_per_day", 10_000)
         else:
-            # Fallback limits if plan not found
             per_minute = 100
             per_day = 10_000
-
     # Enforce rate limits
     allow_request(
         key_hash=key_record["key_hash"],
         per_minute=per_minute,
         per_day=per_day,
     )
-
-    # Charge credits (per-call credit system)
+    # Charge credits
     charge_call_for_key(
         key_record=key_record,
         free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
         plans=PLANS,
     )
-
     return key_record
 
 
@@ -351,33 +344,28 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
     signature = request.headers.get("x-paystack-signature")
     if not verify_paystack_signature(body, signature):
         raise HTTPException(status_code=400, detail="Invalid Paystack signature")
-
     event_type, api_key_hash, plan_code = extract_webhook_info(body)
-
-    # Handle successful payment / subscription activation
+    # Successful payment or subscription activation
     if event_type in ("charge.success", "subscription.create", "subscription.enable"):
         if api_key_hash and plan_code:
+            # Find the plan definition
             plan = next((p for p in PLANS if p["code"] == plan_code), None)
             if plan:
-                # Upgrade to paid, bind plan and reset credits to plan.monthly_credits
                 upgrade_key_tier_by_hash(
                     key_hash=api_key_hash,
                     new_tier="paid",
                     plan=plan,
                     free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
                 )
-
-    # Handle subscription cancellation / disable / repeated failure
+    # Subscription disabled or invoice failed → downgrade to free
     if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
         if api_key_hash:
-            # Downgrade back to free tier and reset to free-tier credits
             upgrade_key_tier_by_hash(
                 key_hash=api_key_hash,
                 new_tier="free",
                 plan=None,
                 free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
             )
-
     return {"status": "ok"}
 
 
@@ -443,12 +431,22 @@ async def swagger_docs(_: Dict[str, Any] = Depends(api_key_required)) -> HTMLRes
         openapi_url="/openapi.json", title="Currency Conversion API Docs"
     )
 
+# ---------------------------------------------------------------------------
+# Public documentation endpoints
+# ---------------------------------------------------------------------------
+
+# We expose a read‑only OpenAPI schema and docs without requiring an API key.
+# These endpoints are useful for developers exploring the API before obtaining
+# a key. They are intentionally excluded from the generated schema via
+# ``include_in_schema=False`` to avoid cluttering the spec with duplicate
+# entries.
 
 @app.get("/public/openapi.json", include_in_schema=False)
-async def public_openapi():
+async def public_openapi_json() -> JSONResponse:
+    """Serve the OpenAPI schema without authentication."""
     global _public_openapi
     try:
-        return JSONResponse(_public_openapi)
+        return JSONResponse(_public_openapi)  # type: ignore
     except NameError:
         _public_openapi = get_openapi(
             title=app.title,
@@ -459,25 +457,21 @@ async def public_openapi():
         return JSONResponse(_public_openapi)
 
 
-# ------------------------------
-# Public Swagger UI (built-in)
-# ------------------------------
 @app.get("/public/docs", include_in_schema=False)
-async def custom_swagger_ui():
+async def public_swagger_ui() -> HTMLResponse:
+    """Serve a public Swagger UI that does not require an API key."""
     return get_swagger_ui_html(
-        title="Public API Docs - Swagger UI",
+        title="Currency Conversion API Docs (Public)",
         openapi_url="/public/openapi.json",
         swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js",
         swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css",
     )
 
 
-# ------------------------------
-# Public ReDoc (built-in)
-# ------------------------------
 @app.get("/public/redoc", include_in_schema=False)
-async def custom_redoc():
+async def public_redoc() -> HTMLResponse:
+    """Serve a public ReDoc interface that does not require an API key."""
     return get_redoc_html(
-        title="Public API Docs - ReDoc",
+        title="Currency Conversion API Docs (ReDoc)",
         openapi_url="/public/openapi.json",
     )
