@@ -1,5 +1,7 @@
 fastapi
 uvicorn
+orjson
 requests
 cachetools
-orjson
+pydantic
+python-dotenv
