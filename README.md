@@ -1,19 +1,20 @@
-# Currency Conversion API
+# 🌍 Currency Conversion API
 
-A **high-performance, production-ready currency conversion service** built with **FastAPI**, offering:
+A **production-ready, high-performance currency conversion API** built with **FastAPI**, featuring:
 
-- Free global FX data (via Fawaz Ahmed's open API — 200+ currencies, no rate limits)  
-- Fallback FX provider for reliability  
-- Pretty JSON formatting  
-- CORS enabled for all frontend use cases  
-- API key authentication  
-- API key generation & revocation  
-- Rate limiting (per API key, per minute & per day)  
-- Secured Swagger documentation  
-- Clean modular architecture  
+- Free & paid API key tiers  
+- Public free-tier key auto-generation (`/auth/free-key`)  
+- FX data from **Fawaz Ahmed Exchange-API** (200+ currencies, no rate limits)  
+- Intelligent fallback FX provider  
+- Pretty JSON output  
+- Secure API key authentication  
+- API key generation & revocation (Admin protected)  
+- Tier-based rate limiting  
+- CORS enabled  
 - Logging middleware  
+- Secured Swagger docs  
 - Health endpoint  
-- Suitable for SaaS, mobile apps, fintech products, and internal tools  
+- Clean modular architecture  
 
 ---
 
@@ -25,6 +26,7 @@ currency_api/
  ├── auth.py
  ├── rate_limit.py
  ├── utils.py
+ ├── admin_token.txt
  ├── keys.json
  ├── requirements.txt
  └── README.md
@@ -34,70 +36,130 @@ currency_api/
 
 # ⭐ Features
 
-### 🔐 API Key Authentication  
-All protected endpoints require an API key.  
-Clients may send the key via:
+## 🔐 API Key Authentication
+All endpoints (except health & free-tier key generation) require:
 
 ```
-X-API-KEY: <your-api-key>
+X-API-KEY: <your-key>
 ```
 
 Or:
 
 ```
-?api_key=<your-api-key>
+?api_key=<your-key>
 ```
 
 ---
 
-### 🔑 API Key Management  
-Admin endpoints let you generate, revoke, and list keys.  
-Keys are hashed using SHA-256 and stored in `keys.json`.
+## 🆓 Free Tier + Paid Tier (Auto-Generated Keys)
 
----
-
-### 📊 Rate Limiting  
-- 100 requests/minute  
-- 10,000 requests/day  
-
----
-
-### 💱 Currency Conversion  
-Uses **Fawaz Ahmed’s Exchange-API** (no rate limits, 200+ currencies).  
-Falls back to **exchangerate.host**.
-
----
-
-### 🎨 Pretty JSON  
-All responses are indented for readability.
-
----
-
-### 🌍 CORS Enabled  
-Frontend frameworks can access API without restrictions.
-
----
-
-### 📜 Secured Swagger Docs  
-Endpoints:  
-- `/docs`  
-- `/openapi.json`  
-
-Both require a valid API key.
-
----
-
-### 🔍 Logging Middleware  
-Example log:
+### 🔸 **Free Tier (public)**
+Generate instantly:
 
 ```
-[GET] /convert 200 18.33ms
+POST /auth/free-key
+```
+
+Response:
+```json
+{
+  "tier": "free",
+  "api_key": "free_91b3fa123ce94d18",
+  "note": "Free-tier keys have limited quota. Upgrade for unlimited usage."
+}
+```
+
+### Free Tier Limits:
+| Tier   | Requests/min | Requests/day |
+|--------|--------------|--------------|
+| Free   | 10           | 200          |
+
+---
+
+### 🔹 **Paid Tier (admin-issued)**
+
+Admin can generate:
+
+```
+POST /admin/generate-key
 ```
 
 ---
 
-### 🟢 Health Endpoint
+## 🛡️ Admin Token (Auto-Generated)
+The API automatically generates a secure admin token and saves it to `admin_token.txt`.
 
+Example:
+
+```
+admtok_8f41e0c7ee2443e498c59c32a8d1bfd1
+```
+
+Use it for all admin endpoints:
+
+```
+X-ADMIN-TOKEN: admtok_xxxxxxxxxxxxx
+```
+
+---
+
+## 🔑 API Key Management
+
+### ✔ Generate Paid API Key (Admin)
+```
+POST /admin/generate-key
+Body:
+{
+  "owner": "Emmanuel"
+}
+```
+
+### ✔ Revoke Key (Admin)
+```
+POST /admin/revoke-key
+Body:
+{
+  "api_key": "..."
+}
+```
+
+### ✔ List All Keys (Admin)
+```
+GET /admin/keys
+```
+
+---
+
+## 💱 Currency Endpoints (Require API Key)
+
+### ✔ Get FX Rate
+```
+GET /rate?from=USD&to=NGN&api_key=<key>
+```
+
+Result:
+```json
+{
+  "from": "USD",
+  "to": "NGN",
+  "rate": 1630.23
+}
+```
+
+### ✔ Convert Amount
+```
+GET /convert?from=EUR&to=USD&amount=50&api_key=<key>
+```
+
+---
+
+## 🔁 FX Provider Fallback
+1. **Primary:** Fawaz Ahmed Exchange-API  
+2. **Fallback:** exchangerate.host  
+
+---
+
+## 🟢 Health Check
 ```
 GET /health
 ```
@@ -106,64 +168,34 @@ GET /health
 
 # 🔧 Installation
 
-### Clone the repository
+Clone:
 ```bash
 git clone https://github.com/<your-username>/currency_api.git
 cd currency_api
 ```
 
-### Install dependencies
+Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-### Set Admin Token
-```bash
-export ADMIN_TOKEN=your-secret-token
-```
-
-### Run the API
+Run:
 ```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-# 🔐 Admin Endpoints
+# 📜 Secured Documentation
 
-### Generate an API Key
+Swagger UI:
 ```
-POST /admin/generate-key
-```
-```json
-{ "owner": "Emmanuel" }
+GET /docs?api_key=<your-key>
 ```
 
-### Revoke a Key
+OpenAPI schema:
 ```
-POST /admin/revoke-key
-```
-```json
-{ "api_key": "<key>" }
-```
-
-### List Keys
-```
-GET /admin/keys
-```
-
----
-
-# 💱 User Endpoints
-
-### Get FX Rate
-```
-GET /rate?from=USD&to=NGN
-```
-
-### Convert Amount
-```
-GET /convert?from=EUR&to=USD&amount=50
+GET /openapi.json?api_key=<your-key>
 ```
 
 ---
@@ -171,44 +203,56 @@ GET /convert?from=EUR&to=USD&amount=50
 # 🚀 Deployment
 
 ## Railway
-- Deploy from GitHub
-- Build command: `pip install -r requirements.txt`
-- Start command:  
+- Deploy repo  
+- Build: `pip install -r requirements.txt`  
+- Start:  
   ```
   uvicorn main:app --host 0.0.0.0 --port $PORT
   ```
+- Set environment variables if needed  
 
 ## Render
 Same as Railway.
 
-## AWS Lambda
-Use **Mangum** adapter and deploy via API Gateway.
+## AWS Lambda (Serverless)
+- Add `lambda_handler.py`:
+```python
+from main import app
+from mangum import Mangum
+handler = Mangum(app)
+```
+- Deploy via API Gateway  
 
 ## Docker
 ```
 docker build -t currency_api .
-docker run -p 8000:8000 -e ADMIN_TOKEN=token currency_api
+docker run -p 8000:8000 -e ADMIN_TOKEN=your-token currency_api
 ```
 
 ---
 
-# 🔒 Security Notes
+# 🔒 Security Recommendations
 
-- Always keep ADMIN_TOKEN private  
-- Never commit raw API keys  
-- Put behind Cloudflare if needed  
-- Switch rate limiting to Redis in production  
+- Do **NOT** commit `admin_token.txt` or `keys.json`  
+- Always rotate admin tokens when compromised  
+- Use HTTPS in production  
+- Use Redis if scaling horizontally  
 
 ---
 
 # ❤️ Credits
 
-Uses public FX data from:
+FX data via:
 
 **Fawaz Ahmed – Exchange API**  
-https://github.com/fawazahmed0/exchange-api
+https://github.com/fawazahmed0/exchange-api  
 
-Fallback provider: **exchangerate.host**
+Fallback:  
+**exchangerate.host**
 
 ---
 
+# 📄 License
+
+MIT License  
+See `LICENSE` file.
