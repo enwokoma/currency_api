@@ -13,7 +13,8 @@ from auth import (
     validate_api_key,
     generate_api_key,
     revoke_api_key,
-    load_keys
+    load_keys,
+    generate_free_key
 )
 
 from rate_limit import allow_request
@@ -214,6 +215,24 @@ def admin_list_keys(_: bool = Depends(admin_required)):
             for k in data["keys"]
         ]
     }
+
+
+# ==================================================================
+# FREE-TIER: KEY MANAGEMENT
+# ==================================================================
+
+@app.post("/auth/free-key")
+def get_free_key():
+    """
+    Public endpoint: users can request a free-tier API key instantly.
+    """
+    raw = generate_free_key()
+    return {
+        "tier": "free",
+        "api_key": raw,
+        "note": "Free-tier keys have limited quota. Upgrade for unlimited usage."
+    }
+
 
 
 # ==================================================================

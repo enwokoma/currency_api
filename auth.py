@@ -93,3 +93,24 @@ def revoke_api_key(raw_key: str):
             return True
 
     raise HTTPException(status_code=404, detail="API key not found")
+
+
+# ------------------------------------------
+# Free-Tier Key
+# ------------------------------------------
+
+def generate_free_key():
+    raw = "free_" + uuid.uuid4().hex[:16]
+    hashed = hash_key(raw)
+
+    data = load_keys()
+    data["keys"].append({
+        "key_hash": hashed,
+        "owner": "free-tier",
+        "tier": "free",
+        "active": True,
+        "created_at": time.time()
+    })
+    save_keys(data)
+
+    return raw
