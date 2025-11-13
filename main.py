@@ -113,7 +113,10 @@ async def prettify_json(request: Request, call_next):
 def api_key_required(request: Request):
     raw = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
     key = validate_api_key(raw)
-    allow_request(key["key_hash"])
+
+    tier = key.get("tier", "paid")
+    allow_request(key["key_hash"], tier=tier)
+
     return key
 
 
