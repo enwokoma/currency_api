@@ -1,258 +1,227 @@
-# 🌍 Currency Conversion API
+# Currency Conversion API
 
-A **production-ready, high-performance currency conversion API** built with **FastAPI**, featuring:
+Welcome to the **Currency Conversion API** – a high‑performance,
+subscription‑aware service for converting amounts between world
+currencies. The API is built with [FastAPI](https://fastapi.tiangolo.com/)
+and powered by the open‑source
+[Exchange‑API](https://github.com/fawazahmed0/exchange-api) project. The
+upstream dataset offers over 200 currency rates (including common
+cryptocurrencies and metals) and is updated daily【342527198209133†L11-L16】.
 
-- Free & paid API key tiers  
-- Public free-tier key auto-generation (`/auth/free-key`)  
-- FX data from **Fawaz Ahmed Exchange-API** (200+ currencies, no rate limits)  
-- Intelligent fallback FX provider  
-- Pretty JSON output  
-- Secure API key authentication  
-- API key generation & revocation (Admin protected)  
-- Tier-based rate limiting  
-- CORS enabled  
-- Logging middleware  
-- Secured Swagger docs  
-- Health endpoint  
-- Clean modular architecture  
+This repository packages the exchange data into a secure, rate‑limited
+service with free and paid tiers, Paystack billing integration, and
+pretty‑printed JSON responses. Whether you need a simple rate lookup
+or a full subscription flow for your application, this API has you
+covered.
 
 ---
 
-# 📁 Project Structure
+## 🔑 Authentication & Tiers
 
-```
-currency_api/
- ├── main.py
- ├── auth.py
- ├── rate_limit.py
- ├── utils.py
- ├── admin_token.txt
- ├── keys.json
- ├── requirements.txt
- └── README.md
-```
+All core endpoints require an **API key**. Keys come in two flavours:
 
----
+| Tier   | How to obtain | Limits (per minute / per day) | Notes |
+|--------|---------------|-------------------------------|------|
+| **Free** | `POST /auth/free-key` | 10 requests per minute, 200 per day | Great for prototypes and low‑volume usage |
+| **Paid** | Admin‑generated or upgraded via Paystack | Depends on plan (e.g. 100/10k or 300/50k) | Unlock higher limits and premium support |
 
-# ⭐ Features
+API keys are sent via HTTP header (`X-API-KEY`) or query
+parameter (`api_key`). If absent or invalid, the API returns
+`401 Unauthorized`.
 
-## 🔐 API Key Authentication
-All endpoints (except health & free-tier key generation) require:
+### 🔐 Admin Token
 
-```
-X-API-KEY: <your-key>
-```
-
-Or:
-
-```
-?api_key=<your-key>
-```
+Administrative endpoints (key generation, revocation, listing) are
+protected by a separate **admin token**. On first run the service
+generates a secure token and writes it to `admin_token.txt`; you can
+also set `ADMIN_TOKEN` in your environment. Use this token in the
+`X-ADMIN-TOKEN` header to call admin routes.
 
 ---
 
-## 🆓 Free Tier + Paid Tier (Auto-Generated Keys)
+## 📑 Endpoints Overview
 
-### 🔸 **Free Tier (public)**
-Generate instantly:
+### Core Endpoints (API key required)
 
-```
-POST /auth/free-key
-```
+| Method & path | Description |
+|---------------|-------------|
+| `GET /rate?from=USD&to=NGN` | Return the exchange rate from one currency to another |
+| `GET /convert?from=EUR&to=USD&amount=50` | Convert an amount from one currency to another |
 
-Response:
-```json
-{
-  "tier": "free",
-  "api_key": "free_91b3fa123ce94d18",
-  "note": "Free-tier keys have limited quota. Upgrade for unlimited usage."
-}
-```
+### Auth Endpoints
 
-### Free Tier Limits:
-| Tier   | Requests/min | Requests/day |
-|--------|--------------|--------------|
-| Free   | 10           | 200          |
+| Method & path | Description |
+|---------------|-------------|
+| `POST /auth/free-key` | Obtain a free‑tier API key instantly |
 
----
+### Billing Endpoints
 
-### 🔹 **Paid Tier (admin-issued)**
+| Method & path | Description |
+|---------------|-------------|
+| `GET /plans` | List available subscription plans |
+| `POST /billing/upgrade` | Start a Paystack transaction to upgrade a key |
+| `POST /paystack/webhook` | Receive Paystack events and apply upgrades/downgrades |
 
-Admin can generate:
+### Admin Endpoints (admin token required)
 
-```
-POST /admin/generate-key
-```
+| Method & path | Description |
+|---------------|-------------|
+| `POST /admin/generate-key` | Generate a new paid API key |
+| `POST /admin/revoke-key` | Revoke an existing API key |
+| `GET /admin/keys` | List all keys with metadata |
 
----
-
-## 🛡️ Admin Token (Auto-Generated)
-The API automatically generates a secure admin token and saves it to `admin_token.txt`.
-
-Example:
-
-```
-admtok_8f41e0c7ee2443e498c59c32a8d1bfd1
-```
-
-Use it for all admin endpoints:
-
-```
-X-ADMIN-TOKEN: admtok_xxxxxxxxxxxxx
-```
+The API also exposes a health check at `/health` (no auth) and
+secured documentation at `/docs` and `/openapi.json` (API key
+required).
 
 ---
 
-## 🔑 API Key Management
+## 💡 How It Works
 
-### ✔ Generate Paid API Key (Admin)
-```
-POST /admin/generate-key
-Body:
-{
-  "owner": "Emmanuel"
-}
-```
-
-### ✔ Revoke Key (Admin)
-```
-POST /admin/revoke-key
-Body:
-{
-  "api_key": "..."
-}
-```
-
-### ✔ List All Keys (Admin)
-```
-GET /admin/keys
-```
+1. **Get a free key**: `POST /auth/free-key` returns a JSON object
+   containing a `free_` prefixed API key. Use it in the `X-API-KEY` header.
+2. **Hit rate limits**: Free keys are limited to 10 requests/min and
+   200/day. Paid keys without a plan fall back to 100/min and
+   10 000/day.
+3. **List plans**: `GET /plans` shows available subscription
+   options. Each plan has a price (in NGN) and custom rate limits.
+4. **Upgrade via Paystack**:
+   - Call `POST /billing/upgrade` with your email and the `plan_code`
+     you want. The request must be authenticated with the key you wish
+     to upgrade.
+   - The API returns an `authorization_url` and a `reference`.
+   - Redirect your user to the URL to complete payment.
+   - Paystack sends a webhook to `/paystack/webhook`. On success, the
+     key’s tier becomes `paid` and its plan code is stored. If
+     subscription is disabled or a payment fails, the key downgrades
+     back to free.
 
 ---
 
-## 💱 Currency Endpoints (Require API Key)
+## 🚀 Installation & Running Locally
 
-### ✔ Get FX Rate
-```
-GET /rate?from=USD&to=NGN&api_key=<key>
-```
+1. **Clone the repo** and change into it:
 
-Result:
-```json
-{
-  "from": "USD",
-  "to": "NGN",
-  "rate": 1630.23
-}
-```
+   ```bash
+   git clone https://github.com/<your-username>/currency_api.git
+   cd currency_api
+   ```
 
-### ✔ Convert Amount
-```
-GET /convert?from=EUR&to=USD&amount=50&api_key=<key>
-```
+2. **Install dependencies**:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Set environment variables** (optional but recommended):
+
+   - `ADMIN_TOKEN` – overrides the generated admin token.
+   - `PAYSTACK_SECRET_KEY` – your Paystack secret for billing.
+
+   For example:
+
+   ```bash
+   export ADMIN_TOKEN=super-secret-admin
+   export PAYSTACK_SECRET_KEY=sk_test_xxxxxxxx
+   ```
+
+4. **Run the server**:
+
+   ```bash
+   uvicorn currency_api.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+5. **Generate your first paid key** (if you’re the admin):
+
+   ```bash
+   curl -X POST http://localhost:8000/admin/generate-key \
+     -H "X-ADMIN-TOKEN: <your-admin-token>" \
+     -H "Content-Type: application/json" \
+     -d '{"owner": "Alice"}'
+   ```
+
+6. **Call the API**:
+
+   ```bash
+   curl "http://localhost:8000/convert?from=USD&to=NGN&amount=100" \
+     -H "X-API-KEY: <your-api-key>"
+   ```
 
 ---
 
-## 🔁 FX Provider Fallback
-1. **Primary:** Fawaz Ahmed Exchange-API  
-2. **Fallback:** exchangerate.host  
+## 🔧 Deployment
 
----
+This service is suitable for deployment on any cloud or self‑hosted
+platform. For convenience, here are some guidelines:
 
-## 🟢 Health Check
+### Railway
+
+1. Push this repo to GitHub.
+2. Create a new Railway project and link the repository.
+3. Set environment variables in Railway:
+   - `ADMIN_TOKEN` (optional)
+   - `PAYSTACK_SECRET_KEY`
+4. Use the build command `pip install -r requirements.txt` and start
+   command:
+
+   ```bash
+   uvicorn currency_api.main:app --host 0.0.0.0 --port ${PORT:-8000}
+   ```
+5. Deploy! Railway handles HTTPS and scaling.
+
+### Render
+
+1. Create a Web Service from your GitHub repo.
+2. Choose a Python environment; set build command `pip install -r
+   requirements.txt`.
+3. Set start command and environment variables as above.
+4. Render automatically provisions HTTPS for you.
+
+### AWS Lambda (serverless)
+
+1. Install [`Mangum`](https://github.com/erm/mangum) to adapt FastAPI
+   for Lambda: `pip install mangum`.
+2. Add a `lambda_main.py` file:
+
+   ```python
+   from currency_api.main import app
+   from mangum import Mangum
+
+   handler = Mangum(app)
+   ```
+
+3. Package dependencies or build a container image.
+4. Connect an API Gateway to the Lambda function.
+
+### Docker / VPS
+
+Create a `Dockerfile`:
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir -r requirements.txt
+ENV ADMIN_TOKEN=change-me
+EXPOSE 8000
+CMD ["uvicorn", "currency_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
-GET /health
-```
 
----
+Build and run:
 
-# 🔧 Installation
-
-Clone:
 ```bash
-git clone https://github.com/<your-username>/currency_api.git
-cd currency_api
-```
-
-Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-Run:
-```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+docker build -t currency-api .
+docker run -p 8000:8000 -e ADMIN_TOKEN=super-secret -e PAYSTACK_SECRET_KEY=sk_test_xxxx currency-api
 ```
 
 ---
 
-# 📜 Secured Documentation
+## 📒 License & Credits
 
-Swagger UI:
-```
-GET /docs?api_key=<your-key>
-```
+This project is licensed under the MIT license. It builds upon the
+open exchange data published by Fawaz Ahmed under the CC0-1.0
+license【342527198209133†L11-L16】.
 
-OpenAPI schema:
-```
-GET /openapi.json?api_key=<your-key>
-```
-
----
-
-# 🚀 Deployment
-
-## Railway
-- Deploy repo  
-- Build: `pip install -r requirements.txt`  
-- Start:  
-  ```
-  uvicorn main:app --host 0.0.0.0 --port $PORT
-  ```
-- Set environment variables if needed  
-
-## Render
-Same as Railway.
-
-## AWS Lambda (Serverless)
-- Add `lambda_handler.py`:
-```python
-from main import app
-from mangum import Mangum
-handler = Mangum(app)
-```
-- Deploy via API Gateway  
-
-## Docker
-```
-docker build -t currency_api .
-docker run -p 8000:8000 -e ADMIN_TOKEN=your-token currency_api
-```
-
----
-
-# 🔒 Security Recommendations
-
-- Do **NOT** commit `admin_token.txt` or `keys.json`  
-- Always rotate admin tokens when compromised  
-- Use HTTPS in production  
-- Use Redis if scaling horizontally  
-
----
-
-# ❤️ Credits
-
-FX data via:
-
-**Fawaz Ahmed – Exchange API**  
-https://github.com/fawazahmed0/exchange-api  
-
-Fallback:  
-**exchangerate.host**
-
----
-
-# 📄 License
-
-MIT License  
-See `LICENSE` file.
+If you need plan customizations, cancellation flows, or additional
+features such as a web dashboard, feel free to extend the code! Pull
+requests are welcome.
