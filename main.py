@@ -83,6 +83,12 @@ from billing import (
     verify_paystack_signature,
     extract_webhook_info,
 )
+from transactions import (
+    record_transaction,
+    update_transactions_for_key,
+    load_transactions,
+    get_transactions_for_key,
+)
 
 # Try to load environment variables from a .env file if python-dotenv is installed.
 try:
@@ -649,6 +655,17 @@ def billing_upgrade(
         paystack_plan_code=paystack_code,
         metadata_plan_code=plan["code"],
     )
+
+    # Record this transaction as pending in the transaction history.
+    record_transaction(
+        api_key_hash=key["key_hash"],
+        email=payload.email,
+        plan_code=plan["code"],
+        paystack_plan_code=paystack_code,
+        amount_naira=plan["price_naira"],
+        reference=reference,
+        status="pending",
+    )
     return {
         "authorization_url": auth_url,
         "reference": reference,
@@ -670,21 +687,27 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
             # Find the plan definition
             plan = next((p for p in PLANS if p["code"] == plan_code), None)
             if plan:
+                # Update the key tier and plan
                 upgrade_key_tier_by_hash(
                     key_hash=api_key_hash,
                     new_tier="paid",
                     plan=plan,
                     free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
                 )
+                # Mark the associated transactions as successful
+                update_transactions_for_key(api_key_hash, new_status="success")
     # Subscription disabled or invoice failed → downgrade to free
     if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
         if api_key_hash:
+            # Downgrade the key to free
             upgrade_key_tier_by_hash(
                 key_hash=api_key_hash,
                 new_tier="free",
                 plan=None,
                 free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
             )
+            # Mark pending transactions for this key as failed
+            update_transactions_for_key(api_key_hash, new_status="failed")
     return {"status": "ok"}
 
 
@@ -706,6 +729,34 @@ def admin_revoke_key(
     """Admin endpoint to revoke an existing API key."""
     revoke_api_key(payload.api_key)
     return {"status": "ok", "message": "API key revoked"}
+
+
+# ---------------------------------------------------------------------------
+# Transaction history endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/transactions", tags=["Billing"])
+def list_my_transactions(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]:
+    """Return the transaction history for the calling user's API key.
+
+    This endpoint lists all payment transactions associated with the
+    provided API key. It is intended for non-admin users to view
+    their own subscription payment history. Transactions include
+    pending, successful and failed statuses.
+    """
+    txns = get_transactions_for_key(key["key_hash"])
+    return {"transactions": txns}
+
+
+@app.get("/admin/transactions", tags=["Admin"])
+def list_all_transactions(_: bool = Depends(admin_required)) -> Dict[str, Any]:
+    """Return the transaction history for all API keys (admin only).
+
+    Admins can use this endpoint to view every recorded payment
+    transaction across all keys. The list is not filtered or masked.
+    """
+    txns = load_transactions().get("transactions", [])
+    return {"transactions": txns}
 
 
 @app.get("/admin/keys", tags=["Admin"])

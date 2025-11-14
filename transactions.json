@@ -1,0 +1,15 @@
+{
+  "transactions": [
+    {
+      "reference": "ref_test",
+      "api_key_hash": "f3e2892d88c1e1d3200b47f929359c15bf111da90d8fea94791a9d6c2bdd3738",
+      "email": "user@example.com",
+      "plan_code": "PRO_MONTHLY",
+      "paystack_plan_code": "PLN_testpro",
+      "amount_naira": 5000,
+      "status": "success",
+      "created_at": 1763127316.8147922,
+      "updated_at": 1763127316.8240352
+    }
+  ]
+}
