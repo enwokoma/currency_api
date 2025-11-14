@@ -134,6 +134,22 @@ ADMIN_TOKEN = _load_or_create_admin_token()
 # rate limits (per minute and per day), and the monthly credits
 # (billable calls) available on the plan. ``monthly_credits`` can be
 # None to indicate unlimited billable calls.
+# Subscription plans. Update this list to match the plans created in
+# your Paystack dashboard. Each plan defines the price in Naira, the
+# rate limits (per minute and per day), monthly credits, and the
+# corresponding Paystack plan code. The Paystack plan codes are
+# loaded from environment variables so that they are not hardcoded in
+# the source. If the environment variable is missing for a plan, the
+# plan will not include a ``paystack_plan_code`` and attempting to
+# upgrade to it will fail with a clear error.
+
+# Load Paystack plan codes from environment. These environment
+# variables should be defined in your .env file or the deployment
+# environment. They map our internal plan codes to the codes defined
+# on your Paystack dashboard.
+_PAYSTACK_PLAN_BASIC = os.getenv("PAYSTACK_PLAN_BASIC")
+_PAYSTACK_PLAN_PRO = os.getenv("PAYSTACK_PLAN_PRO")
+
 PLANS = [
     {
         "code": "BASIC_MONTHLY",
@@ -143,6 +159,10 @@ PLANS = [
         "requests_per_minute": 100,
         "requests_per_day": 10_000,
         "monthly_credits": 5000,
+        # Include the Paystack plan code for this plan. Use the
+        # environment variable PAYSTACK_PLAN_BASIC to avoid
+        # hardcoding sensitive values in the repository.
+        "paystack_plan_code": _PAYSTACK_PLAN_BASIC,
     },
     {
         "code": "PRO_MONTHLY",
@@ -152,6 +172,9 @@ PLANS = [
         "requests_per_minute": 300,
         "requests_per_day": 50_000,
         "monthly_credits": 20_000,
+        # Include the Paystack plan code for this plan from
+        # environment variable PAYSTACK_PLAN_PRO.
+        "paystack_plan_code": _PAYSTACK_PLAN_PRO,
     },
 ]
 
@@ -607,11 +630,24 @@ def billing_upgrade(
     if not plan:
         raise HTTPException(status_code=400, detail="Unknown plan_code")
     # Start Paystack transaction
+    # Resolve the Paystack plan code from the selected plan. This will be
+    # None if the environment variable is missing. In that case, we
+    # cannot proceed with the upgrade.
+    paystack_code = plan.get("paystack_plan_code")
+    if not paystack_code:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paystack plan code is not configured for plan '{plan['code']}'",
+        )
+    # Initiate the Paystack transaction using the dashboard plan code. We
+    # include our internal plan code in the metadata so that the webhook
+    # can later map the Paystack plan back to the correct PLANS entry.
     auth_url, reference = initialize_transaction(
         email=payload.email,
         amount_naira=plan["price_naira"],
         api_key_hash=key["key_hash"],
-        plan_code=payload.plan_code,
+        paystack_plan_code=paystack_code,
+        metadata_plan_code=plan["code"],
     )
     return {
         "authorization_url": auth_url,

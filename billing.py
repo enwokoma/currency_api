@@ -42,12 +42,17 @@ def _get_headers() -> Dict[str, str]:
 
 
 def initialize_transaction(
-    email: str, amount_naira: int, api_key_hash: str, plan_code: str
+    email: str,
+    amount_naira: int,
+    api_key_hash: str,
+    paystack_plan_code: str,
+    metadata_plan_code: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Initiate a Paystack transaction for subscription upgrade.
 
-    Creates a Paystack payment transaction pointing at a specific plan.
-    The metadata includes the API key hash so that the webhook can
+    Creates a Paystack payment transaction pointing at a specific plan
+    defined on your Paystack dashboard. The metadata includes the API
+    key hash and your internal ``plan_code`` so that the webhook can
     identify which key to upgrade when payment succeeds.
 
     Args:
@@ -55,8 +60,14 @@ def initialize_transaction(
         amount_naira: The amount in Naira for the plan (Paystack uses
             kobo internally).
         api_key_hash: Hash of the API key being upgraded (metadata).
-        plan_code: The Paystack plan code corresponding to the chosen
-            subscription tier.
+        paystack_plan_code: The plan code as defined on Paystack. This
+            value is passed directly to the Paystack API's ``plan``
+            parameter and must match a plan configured in your Paystack
+            dashboard.
+        metadata_plan_code: Your internal plan code (e.g. ``BASIC_MONTHLY`` or
+            ``PRO_MONTHLY``). If provided, this code is stored in the
+            transaction metadata under the ``plan_code`` key. If omitted,
+            the Paystack plan code is also used as the metadata plan code.
 
     Returns:
         A tuple ``(authorization_url, reference)`` where
@@ -66,13 +77,18 @@ def initialize_transaction(
     Raises:
         HTTPException: If Paystack returns an error.
     """
+    # Use the internal plan code for metadata if provided, otherwise fall back
+    # to the Paystack plan code. This allows us to map Paystack plans back
+    # to our internal plans in the webhook handler.
+    meta_code = metadata_plan_code or paystack_plan_code
     payload = {
         "email": email,
         "amount": amount_naira * 100,  # convert Naira to kobo
-        "plan": plan_code,
+        # Paystack expects the dashboard plan code here
+        "plan": paystack_plan_code,
         "metadata": {
             "api_key_hash": api_key_hash,
-            "plan_code": plan_code,
+            "plan_code": meta_code,
         },
     }
     url = f"{PAYSTACK_BASE_URL}/transaction/initialize"
@@ -82,9 +98,11 @@ def initialize_transaction(
     except Exception:
         raise HTTPException(status_code=502, detail="Invalid response from Paystack")
     if not resp.ok or not data.get("status"):
+        # Extract message for clarity if present
+        detail_msg = data.get("message", "Unknown error")
         raise HTTPException(
             status_code=502,
-            detail=f"Paystack init failed: {data.get('message', 'Unknown error')}",
+            detail=f"Paystack init failed: {detail_msg}",
         )
     return data["data"]["authorization_url"], data["data"]["reference"]
 
