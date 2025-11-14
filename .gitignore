@@ -1,3 +1,4 @@
 .env
 /keys.json
+/transactions.json
 /admin_token.txt
