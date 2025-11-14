@@ -130,7 +130,7 @@ def generate_free_key() -> str:
     credits. Credits will be initialised on first use when charging
     occurs.
     """
-    raw = "free_" + uuid.uuid4().hex[:16]
+    raw = "free_" + uuid.uuid4().hex[:32]
     hashed = hash_key(raw)
     data = load_keys()
     data.setdefault("keys", [])

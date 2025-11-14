@@ -113,7 +113,7 @@ def _load_or_create_admin_token() -> str:
     # Otherwise generate a new secure token and save it
     import secrets
 
-    token = "admtok_" + secrets.token_hex(16)
+    token = "admin_token_" + secrets.token_hex(32)
     with open(ADMIN_FILE, "w", encoding="utf-8") as fh:
         fh.write(token)
     print(

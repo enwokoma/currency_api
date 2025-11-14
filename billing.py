@@ -23,16 +23,20 @@ from fastapi import HTTPException
 # Paystack configuration: secret key must be set via environment. This
 # secret is used both for authenticating API requests and for
 # verifying webhook signatures.
-PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
+def get_paystack_key():
+    key = os.getenv("PAYSTACK_SECRET_KEY")
+    if not key:
+        raise RuntimeError("PAYSTACK_SECRET_KEY is not set in environment")
+    return key
+
+## PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 
 
 def _get_headers() -> Dict[str, str]:
     """Construct headers for Paystack API requests."""
-    if not PAYSTACK_SECRET_KEY:
-        raise RuntimeError("PAYSTACK_SECRET_KEY is not set in environment")
     return {
-        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+        "Authorization": f"Bearer {get_paystack_key()}",
         "Content-Type": "application/json",
     }
 
@@ -95,10 +99,10 @@ def verify_paystack_signature(body: bytes, signature: Optional[str]) -> bool:
     Returns:
         True if the signature matches the computed HMAC, False otherwise.
     """
-    if not PAYSTACK_SECRET_KEY or not signature:
+    if not get_paystack_key() or not signature:
         return False
     computed = hmac.new(
-        PAYSTACK_SECRET_KEY.encode("utf-8"), msg=body, digestmod=hashlib.sha512
+        get_paystack_key().encode("utf-8"), msg=body, digestmod=hashlib.sha512
     ).hexdigest()
     # Normalise case and compare in constant time
     return hmac.compare_digest(computed, signature)
