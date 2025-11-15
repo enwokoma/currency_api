@@ -123,23 +123,41 @@ def generate_api_key(owner: str) -> str:
     return raw
 
 
-def generate_free_key() -> str:
+def generate_free_key(owner: str | None = None) -> str:
     """Create a new free API key.
 
     Free keys have a distinctive prefix and start with no plan or
     credits. Credits will be initialised on first use when charging
     occurs.
+
+    Args:
+        owner: Optional identifier for the owner of the key. If
+            provided, the ``owner`` field of the key record will be
+            set to this value instead of the default ``"free-tier"``.
+
+    Returns:
+        The newly generated raw API key string. Only the key's hash
+        and metadata are persisted on disk.
     """
+    # Generate a distinctive free-key prefix so that these keys can be
+    # easily identified. We use a 32-character hex string to minimise
+    # collision risk while keeping the overall key length manageable.
     raw = "free_" + uuid.uuid4().hex[:32]
     hashed = hash_key(raw)
     data = load_keys()
     data.setdefault("keys", [])
-    # Free keys start with no plan and no credits. A credits reset timestamp
-    # is set to one month from now so that monthly quotas reset automatically.
+    # Determine the owner string. If the caller provided an owner, use
+    # that; otherwise fall back to the sentinel value "free-tier". This
+    # allows user-specific free keys without altering existing behaviour
+    # for anonymous free-tier keys.
+    owner_str = owner if owner is not None else "free-tier"
+    # Free keys start with no plan and no credits. A credits reset
+    # timestamp is set to one month from now so that monthly quotas
+    # reset automatically.
     data["keys"].append(
         {
             "key_hash": hashed,
-            "owner": "free-tier",
+            "owner": owner_str,
             "tier": "free",
             "active": True,
             # Human‑readable creation time in WAT

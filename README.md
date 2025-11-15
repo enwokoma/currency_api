@@ -29,6 +29,223 @@ API keys are sent via HTTP header (`X-API-KEY`) or query
 parameter (`api_key`). If absent or invalid, the API returns
 `401 Unauthorized`.
 
+## 👤 User Registration & Sessions
+
+In addition to anonymous keys, the API supports full user accounts.  Creating an account lets you manage multiple keys, upgrade plans and view your profile.  The typical flow is:
+
+1. **Register** with `POST /auth/register` by providing your name, email and password.  The response includes a verification OTP and a token for demonstration; in production you would send these via email.
+2. **Verify** your email using `POST /auth/verify-email` with either the `otp` or `token` returned during registration.  Unverified users cannot log in.
+3. **Log in** via `POST /auth/login` to obtain a session token.  Include the session token in the `X‑SESSION‑TOKEN` header for subsequent user‑protected calls.
+4. **Create keys** with `POST /auth/create-key`, specifying `"free"` or `"paid"` for the tier.  Keys created through this endpoint are bound to your account and can later be upgraded via the billing flow.
+5. **List keys** using `GET /user/keys` and view your profile with `GET /user`.
+6. **Log out** with `POST /auth/logout` to revoke the current session.
+
+Below are request/response examples for the user endpoints.
+
+### Register a new user
+
+```
+POST /auth/register
+Content-Type: application/json
+
+{
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "email": "jane.doe@example.com",
+  "password": "Str0ngP@ss",
+  "confirm_password": "Str0ngP@ss"
+}
+```
+
+Response (201):
+
+```
+{
+  "message": "User registered successfully. Please verify your email.",
+  "user": {
+    "id": "<uuid>",
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "email": "jane.doe@example.com",
+    "email_verified": false,
+    "created_at": "2025-01-01T12:00:00Z",
+    "updated_at": "2025-01-01T12:00:00Z",
+    "last_login_at": null
+  },
+  "verification": {
+    "otp": "123456",
+    "token": "verify_abc123…",
+    "expires_at": 1700000000.0
+  }
+}
+```
+
+### Verify your email
+
+```
+POST /auth/verify-email
+Content-Type: application/json
+
+{
+  "email": "jane.doe@example.com",
+  "otp": "123456"
+}
+```
+
+Response (200):
+
+```
+{
+  "message": "Email verified successfully.",
+  "user": {
+    "id": "<uuid>",
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "email": "jane.doe@example.com",
+    "email_verified": true,
+    "created_at": "2025-01-01T12:00:00Z",
+    "updated_at": "2025-01-01T12:05:00Z",
+    "last_login_at": null
+  }
+}
+```
+
+You can also verify via the `token` returned during registration:
+
+```
+POST /auth/verify-email
+{
+  "email": "jane.doe@example.com",
+  "token": "verify_abc123…"
+}
+```
+
+### Log in
+
+```
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "jane.doe@example.com",
+  "password": "Str0ngP@ss"
+}
+```
+
+Response (200):
+
+```
+{
+  "message": "Login successful.",
+  "session_token": "session_abc123…",
+  "expires_at": 1.700000012e9,
+  "user": {
+    "id": "<uuid>",
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "email": "jane.doe@example.com",
+    "email_verified": true,
+    "created_at": "2025-01-01T12:00:00Z",
+    "updated_at": "2025-01-01T12:05:00Z",
+    "last_login_at": "2025-01-01T12:10:00Z"
+  }
+}
+```
+
+### Create a key (session required)
+
+```
+POST /auth/create-key
+X-SESSION-TOKEN: session_abc123…
+Content-Type: application/json
+
+{
+  "tier": "free"
+}
+```
+
+Response (free key):
+
+```
+{
+  "tier": "free",
+  "api_key": "free_ef2cabe0d5…"
+}
+```
+
+To create a paid key, set the tier to `"paid"`.  Paid keys begin with a random UUID and have no `free_` prefix.
+
+### List your keys
+
+```
+GET /user/keys
+X-SESSION-TOKEN: session_abc123…
+```
+
+Response:
+
+```
+{
+  "keys": [
+    {
+      "tier": "free",
+      "active": true,
+      "plan_code": null,
+      "created_at": "2025-01-01T12:15:00.000",
+      "upgraded_at": null,
+      "key_prefix": "aed79f4c…"
+    },
+    {
+      "tier": "paid",
+      "active": true,
+      "plan_code": null,
+      "created_at": "2025-01-01T12:16:00.000",
+      "upgraded_at": null,
+      "key_prefix": "c1e452a8…"
+    }
+  ]
+}
+```
+
+### Get your profile
+
+```
+GET /user
+X-SESSION-TOKEN: session_abc123…
+```
+
+Response:
+
+```
+{
+  "user": {
+    "id": "<uuid>",
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "email": "jane.doe@example.com",
+    "email_verified": true,
+    "created_at": "2025-01-01T12:00:00Z",
+    "updated_at": "2025-01-01T12:05:00Z",
+    "last_login_at": "2025-01-01T12:10:00Z"
+  }
+}
+```
+
+### Log out
+
+```
+POST /auth/logout
+X-SESSION-TOKEN: session_abc123…
+```
+
+Response:
+
+```
+{
+  "message": "Logged out successfully."
+}
+```
+
 ### 🔐 Admin Token
 
 Administrative endpoints (key generation, revocation, listing) are
@@ -49,11 +266,21 @@ also set `ADMIN_TOKEN` in your environment. Use this token in the
 | `GET /rate?from=USD&to=NGN` | Return the exchange rate from one currency to another |
 | `GET /convert?from=EUR&to=USD&amount=50` | Convert an amount from one currency to another |
 
-### Auth Endpoints
+### Auth & User Endpoints
+
+This API now supports full user management in addition to API key creation.  You can either request an anonymous free key for quick prototyping or create a user account to manage multiple keys and subscription upgrades.  User‑bound keys record the owner and can later be upgraded via Paystack.  Session‑based endpoints require a valid session token in the `X‑SESSION‑TOKEN` header or `session_token` query parameter.
 
 | Method & path | Description |
 |---------------|-------------|
-| `POST /auth/free-key` | Obtain a free‑tier API key instantly |
+| `POST /auth/register` | Register a new user account.  Expects JSON with `first_name`, `last_name`, `email`, `password`, and `confirm_password`.  Returns a sanitized user record along with an OTP and verification link token. |
+| `POST /auth/resend-verification` | Resend a verification code/link for an unverified email.  Send a JSON body containing the `email`.  Returns a new OTP/token. |
+| `POST /auth/verify-email` | Verify your email using either an `otp` or a `token`.  Requires a JSON body with `email` and either `otp` or `token`.  Returns a sanitized user record upon success. |
+| `POST /auth/login` | Log in with your verified email and password.  Expects JSON with `email` and `password`.  Returns a session token and user details. |
+| `POST /auth/logout` | Log out by revoking your current session token.  Provide the token in the `X‑SESSION‑TOKEN` header. |
+| `GET /user` | Retrieve your own profile information.  Requires a valid session token. |
+| `POST /auth/create-key` | Create a new API key tied to your account.  Send JSON with `tier` set to `"free"` or `"paid"`.  Returns the newly generated raw key.  Requires a session token. |
+| `GET /user/keys` | List all API keys you own.  Returns metadata for each key (tier, plan, creation date, etc.).  Requires a session token. |
+| `POST /auth/free-key` | Obtain a free‑tier API key without registering.  Ideal for quick tests. |
 
 ### Billing Endpoints
 

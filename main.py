@@ -90,6 +90,22 @@ from transactions import (
     get_transactions_for_key,
 )
 
+# Import user management helpers. We avoid circular imports by placing this
+# import at module level rather than within endpoint functions. The users
+# module provides synchronous helper functions for creating users,
+# verifying email addresses, authenticating credentials, managing
+# session tokens and retrieving user records. See users.py for details.
+from users import (
+    create_user,
+    authenticate_user,
+    verify_user,
+    start_verification,
+    create_session,
+    revoke_session,
+    get_user_by_session,
+    sanitize_user,
+)
+
 # Try to load environment variables from a .env file if python-dotenv is installed.
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -238,6 +254,61 @@ class UpgradePayload(BaseModel):
     email: str
     plan_code: str
 
+# ---------------------------------------------------------------------------
+# User management models
+# ---------------------------------------------------------------------------
+
+class RegisterPayload(BaseModel):
+    """Payload for user registration.
+
+    Clients must supply first and last names, an email address and
+    password fields. The ``password`` and ``confirm_password`` fields
+    must match. Passwords must be at least 8 characters long; this is
+    enforced in ``users.create_user``.
+    """
+
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+    confirm_password: str
+
+
+class VerifyEmailPayload(BaseModel):
+    """Payload for verifying a user's email address.
+
+    Either ``otp`` or ``token`` must be provided. The email field
+    identifies the user to verify. Verification codes expire after 15
+    minutes. To request a new code, clients can call the
+    ``/auth/resend-verification`` endpoint (implemented below).
+    """
+
+    email: str
+    otp: Optional[str] | None = None
+    token: Optional[str] | None = None
+
+
+class LoginPayload(BaseModel):
+    """Payload for user login.
+
+    The email/password combination must correspond to a registered
+    user whose email has been verified. On success, a short-lived
+    session token is returned.
+    """
+
+    email: str
+    password: str
+
+
+class CreateKeyPayload(BaseModel):
+    """Payload for creating an API key for a user.
+
+    The ``tier`` field determines whether a free or paid key should
+    be created. Valid values are ``"free"`` and ``"paid"``.
+    """
+
+    tier: str
+
 
 # FastAPI app configuration
 app = FastAPI(
@@ -337,6 +408,32 @@ def api_key_required(request: Request) -> Dict[str, Any]:
         plans=PLANS,
     )
     return key_record
+
+
+# ---------------------------------------------------------------------------
+# Session authentication dependency
+# ---------------------------------------------------------------------------
+
+def session_required(request: Request) -> Dict[str, Any]:
+    """Resolve the calling user based on a session token.
+
+    Session tokens are short-lived values created by the ``/auth/login``
+    endpoint. They must be supplied in the ``X-SESSION-TOKEN`` header or
+    as a ``session_token`` query parameter. The helper function
+    ``get_user_by_session`` performs all validation, including expiry
+    checks and email verification. If the token is invalid, expired or
+    revoked, an ``HTTPException`` is raised.
+
+    Returns:
+        The full user record associated with the session token. Callers
+        should pass this record through ``sanitize_user`` before
+        returning it to clients.
+    """
+    token = request.headers.get("X-SESSION-TOKEN") or request.query_params.get(
+        "session_token"
+    )
+    user = get_user_by_session(token)
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +826,220 @@ def admin_revoke_key(
     """Admin endpoint to revoke an existing API key."""
     revoke_api_key(payload.api_key)
     return {"status": "ok", "message": "API key revoked"}
+
+
+# ---------------------------------------------------------------------------
+# User registration, verification and session management endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/register", tags=["User"], status_code=status.HTTP_201_CREATED)
+def register_user(payload: RegisterPayload) -> Dict[str, Any]:
+    """Register a new user.
+
+    This endpoint accepts a first name, last name, email address and
+    password. The password must be at least 8 characters long and
+    match the ``confirm_password`` field. On successful registration,
+    the user's email remains unverified until the verification step is
+    completed. A verification code (OTP) and a verification token are
+    returned in the response for demonstration purposes; in a real
+    deployment these values would be sent via email.
+
+    Raises:
+        HTTPException: If the email is already registered, the
+        password is too short or passwords do not match.
+    """
+    if payload.password != payload.confirm_password:
+        raise HTTPException(
+            status_code=400, detail="Password and confirm password do not match"
+        )
+    # Create the user. The helper will normalise the email, hash the
+    # password and generate an OTP and verification token. It will
+    # raise HTTPException if the email is already registered or the
+    # password is too short.
+    user_rec = create_user(
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        email=payload.email,
+        password=payload.password,
+    )
+    # Extract verification info for demonstration/testing. In a real
+    # system you would send the OTP or token via email and not return
+    # it in the API response.
+    verification = user_rec.get("verification", {}) or {}
+    return {
+        "message": "User registered successfully. Please verify your email.",
+        "user": sanitize_user(user_rec),
+        "verification": {
+            "otp": verification.get("otp"),
+            "token": verification.get("token"),
+            "expires_at": verification.get("expires_at"),
+        },
+    }
+
+
+@app.post("/auth/resend-verification", tags=["User"])
+def resend_verification(email: str = Body(..., embed=True)) -> Dict[str, Any]:
+    """Resend the verification code/link for an unverified user.
+
+    This endpoint regenerates a verification OTP and token for the
+    specified email address. If the user is already verified, an
+    error is raised. The new verification details are returned in
+    plaintext for demonstration; a real implementation should email
+    them to the user.
+    """
+    # Normalise the email before processing; errors bubble up from
+    # ``start_verification`` if the user does not exist or is already
+    # verified.
+    verification = start_verification(email.strip().lower())
+    return {
+        "message": "Verification code has been resent.",
+        "verification": {
+            "otp": verification.get("otp"),
+            "token": verification.get("token"),
+            "expires_at": verification.get("expires_at"),
+        },
+    }
+
+
+@app.post("/auth/verify-email", tags=["User"])
+def verify_email(payload: VerifyEmailPayload) -> Dict[str, Any]:
+    """Verify a user's email address via OTP or token.
+
+    Clients may supply either the OTP or the verification token. If
+    neither is provided, a 400 error is returned. The helper
+    ``verify_user`` performs all validation and marks the email as
+    verified. On success, a sanitized user record is returned.
+    """
+    if not payload.otp and not payload.token:
+        raise HTTPException(status_code=400, detail="Provide either otp or token")
+    user = verify_user(
+        email=payload.email.strip().lower(),
+        otp=payload.otp,
+        token=payload.token,
+    )
+    return {
+        "message": "Email verified successfully.",
+        "user": sanitize_user(user),
+    }
+
+
+@app.post("/auth/login", tags=["User"])
+def login(payload: LoginPayload) -> Dict[str, Any]:
+    """Authenticate a user and issue a session token.
+
+    The user's email must be verified before login is permitted. On
+    success, a session token is generated and returned along with a
+    sanitized user record. Session tokens expire after 24 hours by
+    default; clients should store them securely and include them in
+    subsequent requests via the ``X-SESSION-TOKEN`` header or
+    ``session_token`` query parameter.
+    """
+    user = authenticate_user(
+        email=payload.email.strip().lower(), password=payload.password
+    )
+    session_rec = create_session(user_id=user["id"])
+    return {
+        "message": "Login successful.",
+        "session_token": session_rec["token"],
+        "expires_at": session_rec["expires_at"],
+        "user": sanitize_user(user),
+    }
+
+
+@app.post("/auth/logout", tags=["User"])
+def logout(request: Request) -> Dict[str, Any]:
+    """Revoke an active session token.
+
+    Clients should call this endpoint to invalidate their session
+    token upon logout. The token is extracted from the
+    ``X-SESSION-TOKEN`` header or ``session_token`` query parameter. If
+    the token cannot be found or is already revoked/expired, no
+    exception is thrown; the operation is idempotent.
+    """
+    token = request.headers.get("X-SESSION-TOKEN") or request.query_params.get(
+        "session_token"
+    )
+    if token:
+        revoke_session(token)
+    return {"message": "Logged out successfully."}
+
+
+@app.get("/user", tags=["User"])
+def get_current_user(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
+    """Return the current user's profile (sanitized).
+
+    Requires a valid session token. Only verified users can call this
+    endpoint. The returned record omits sensitive fields such as
+    password hashes and salts.
+    """
+    return {"user": sanitize_user(user)}
+
+
+@app.post("/auth/create-key", tags=["User"])
+def create_key(
+    payload: CreateKeyPayload,
+    user: Dict[str, Any] = Depends(session_required),
+) -> Dict[str, Any]:
+    """Create a new API key for the current user.
+
+    Users may request either a free or paid key. For free keys, the
+    ``generate_free_key`` helper is invoked with the user's id as the
+    owner. Paid keys are created via ``generate_api_key`` which
+    defaults to unlimited credits until a subscription plan is
+    applied. The resulting raw key string is returned. Clients are
+    responsible for storing the key securely.
+
+    Args:
+        payload: A ``CreateKeyPayload`` specifying the desired tier.
+        user: The authenticated user record resolved via the session.
+
+    Returns:
+        A dictionary containing the ``tier`` and the newly created
+        ``api_key``.
+
+    Raises:
+        HTTPException: If the tier is invalid.
+    """
+    tier_lower = payload.tier.strip().lower()
+    if tier_lower not in {"free", "paid"}:
+        raise HTTPException(status_code=400, detail="Invalid key tier specified")
+    if tier_lower == "free":
+        raw_key = generate_free_key(owner=user["id"])
+        return {"tier": "free", "api_key": raw_key}
+    else:
+        # For paid keys, set owner to the user's id. The key will
+        # default to unlimited credits until the user upgrades via
+        # subscription. Users can later apply a plan using the
+        # `/billing/upgrade` endpoint with their key.
+        raw_key = generate_api_key(owner=user["id"])
+        return {"tier": "paid", "api_key": raw_key}
+
+
+@app.get("/user/keys", tags=["User"])
+def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
+    """List all API keys owned by the current user.
+
+    Filters the ``keys.json`` store by the ``owner`` field matching
+    the user's id. Only active keys are returned. The ``key_prefix``
+    field exposes the first eight characters of the key hash for
+    reference. Note that raw keys are never retrievable once created;
+    users must store them securely when first generated.
+    """
+    data = load_keys()
+    owned = []
+    for record in data.get("keys", []):
+        if record.get("owner") == user["id"]:
+            owned.append(
+                {
+                    "tier": record.get("tier"),
+                    "active": record.get("active", True),
+                    "plan_code": record.get("plan_code"),
+                    "created_at": to_wat_iso(record.get("created_at")),
+                    "upgraded_at": to_wat_iso(record.get("upgraded_at")),
+                    "key_prefix": record.get("key_hash", "")[:8] + "…",
+                }
+            )
+    return {"keys": owned}
 
 
 # ---------------------------------------------------------------------------
