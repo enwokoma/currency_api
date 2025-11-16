@@ -316,15 +316,16 @@ def validate_api_key(
         if record.get("key_hash") == hashed:
             if not record.get("active", True):
                 status = record.get("subscription_status")
-                if status == "pending" and allow_inactive:
-                    # Pending keys are allowed to proceed only when explicitly requested
+                if allow_inactive:
+                    # For billing flows or admin actions we permit inactive keys to pass through.
                     pass
                 elif status == "pending":
                     raise HTTPException(
                         status_code=402,
                         detail="Subscription is pending activation for this key",
                     )
-                raise HTTPException(status_code=403, detail="API key has been revoked")
+                else:
+                    raise HTTPException(status_code=403, detail="API key has been revoked")
             # Default missing tier to paid for legacy keys
             record.setdefault("tier", "paid")
             record.setdefault("subscription_status", "active" if record.get("tier") == "paid" else "free")
@@ -360,6 +361,22 @@ def revoke_api_key(raw_key: str) -> None:
             record["active"] = False
             save_keys(data)
             return
+    raise HTTPException(status_code=404, detail="API key not found")
+
+
+def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> Dict[str, Any]:
+    """Reactivate a previously revoked or inactive key."""
+    hashed = hash_key(raw_key)
+    data = load_keys()
+    for record in data.get("keys", []):
+        if record.get("key_hash") == hashed:
+            record["active"] = True
+            if subscription_status is not None:
+                record["subscription_status"] = subscription_status
+            save_keys(data)
+            record_copy = dict(record)
+            record_copy["key_hash"] = hashed
+            return record_copy
     raise HTTPException(status_code=404, detail="API key not found")
 
 

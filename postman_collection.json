@@ -176,6 +176,18 @@
           }
         },
         {
+          "name": "Admin Unrevoke Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"api_key\": \"{{free_api_key}}\", \"subscription_status\": \"active\" }" },
+            "url": { "raw": "{{base_url}}/admin/unrevoke-key", "host": ["{{base_url}}"], "path": ["admin", "unrevoke-key"] }
+          }
+        },
+        {
           "name": "Admin Usage",
           "request": {
             "method": "GET",

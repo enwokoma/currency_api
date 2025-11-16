@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from typing import Dict, Any, Optional, Tuple
 
 try:
@@ -71,6 +72,7 @@ from auth import (
     generate_api_key,
     generate_free_key,
     revoke_api_key,
+    restore_api_key,
     load_keys,
     upgrade_key_tier_by_hash,
     charge_call_for_key,
@@ -111,6 +113,9 @@ from users import (
     sanitize_user,
 )
 
+
+from webhook_logs import log_webhook_event
+
 # Try to load environment variables from a .env file if python-dotenv is installed.
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -118,6 +123,7 @@ try:
 except ImportError:
     # python-dotenv is optional; environment variables can still be provided
     pass
+
 
 
 # The admin token for key management. This is loaded from the
@@ -261,6 +267,11 @@ class OwnerPayload(KeyContact):
 
 class RevokePayload(BaseModel):
     api_key: str
+
+
+class RestorePayload(BaseModel):
+    api_key: str
+    subscription_status: Optional[str] = None
 
 
 class UpgradePayload(BaseModel):
@@ -488,6 +499,19 @@ def _start_subscription_checkout(
 
 
 # FastAPI app configuration
+class PrettyJSONResponse(JSONResponse):
+    """Render JSON with indentation for readability."""
+
+    media_type = "application/json"
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return orjson.dumps(content, option=orjson.OPT_INDENT_2)
+        except Exception:
+            return json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+# FastAPI app configuration
 app = FastAPI(
     title="Currency Conversion API",
     description=(
@@ -495,8 +519,8 @@ app = FastAPI(
         "with fallback provider, API keys, rate limiting, free and paid tiers, "
         "and Paystack subscription upgrades."
     ),
-    version="3.0.0",
-    default_response_class=ORJSONResponse,
+    version="3.1.0",
+    default_response_class=PrettyJSONResponse,
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -524,15 +548,18 @@ async def request_logger(request: Request, call_next):
     return response
 
 
+@app.exception_handler(HTTPException)
+async def pretty_http_exception(request: Request, exc: HTTPException):
+    """Ensure HTTP errors are returned as pretty JSON."""
+    return PrettyJSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+
 @app.middleware("http")
 async def prettify_json(request: Request, call_next):
     resp = await call_next(request)
-    if hasattr(resp, "body"):
-        try:
-            data = orjson.loads(resp.body)
-            resp.body = orjson.dumps(data, option=orjson.OPT_INDENT_2)
-        except Exception:
-            pass
     return resp
 
 
@@ -604,7 +631,7 @@ def billing_key_required(request: Request) -> Dict[str, Any]:
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
     key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
     # Hard-block revoked keys that are not merely pending activation
-    if not key_record.get("active", True) and key_record.get("subscription_status") != "pending":
+    if not key_record.get("active", True) and key_record.get("subscription_status") not in {"pending", None}:
         raise HTTPException(
             status_code=403,
             detail="This key is inactive. Contact support or generate a new key.",
@@ -1079,6 +1106,7 @@ def cancel_subscription(
 async def paystack_webhook(request: Request) -> Dict[str, str]:
     """Handle Paystack webhook events for subscription management."""
     body = await request.body()
+    log_webhook_event(body)  # Log the raw webhook body
     signature = request.headers.get("x-paystack-signature")
     if not verify_paystack_signature(body, signature):
         raise HTTPException(status_code=400, detail="Invalid Paystack signature")
@@ -1164,6 +1192,24 @@ def admin_revoke_key(
     """Admin endpoint to revoke an existing API key."""
     revoke_api_key(payload.api_key)
     return {"status": "ok", "message": "API key revoked"}
+
+
+@app.post("/admin/unrevoke-key", tags=["Admin"])
+def admin_unrevoke_key(
+    payload: RestorePayload,
+    _: bool = Depends(admin_required),
+) -> Dict[str, Any]:
+    """Admin endpoint to reactivate a previously revoked/inactive API key."""
+    record = restore_api_key(
+        payload.api_key, subscription_status=payload.subscription_status
+    )
+    return {
+        "status": "ok",
+        "message": "API key reactivated",
+        "active": record.get("active", True),
+        "subscription_status": record.get("subscription_status"),
+        "tier": record.get("tier"),
+    }
 
 
 # ---------------------------------------------------------------------------
