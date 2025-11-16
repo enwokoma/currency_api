@@ -119,6 +119,14 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 - Header: `X-SESSION-TOKEN: {{session_token}}`
 - **Response 200** - keys with `tier`, `plan_code`, `pending_plan_code`, `subscription_status`, contact fields, timestamps, and a `key_prefix`.
 
+### Revoke/regenerate my key (password-protected)
+- `POST /user/keys/revoke` – body `{ "api_key": "<raw>", "password": "..." }`
+- `POST /user/keys/regenerate` – body `{ "api_key": "<raw>", "password": "..." }` (returns new raw key; old key is invalidated)
+- If you've misplaced the raw key, use the prefix from `/user/keys`:
+  - `POST /user/keys/revoke-by-prefix` – `{ "key_prefix": "abcd1234", "password": "..." }`
+  - `POST /user/keys/regenerate-by-prefix` – `{ "key_prefix": "abcd1234", "password": "..." }` (returns new raw key)
+All flows confirm your password and require the session token.
+
 ### Admin generate key - `POST /admin/generate-key`
 - Headers: `X-ADMIN-TOKEN: {{admin_token}}`
 ```json
@@ -180,6 +188,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 ```
 Contact fields overwrite the stored contact (and remain unique).  
 **Response 200** - `{ "authorization_url": "...", "reference": "...", "plan": { ... } }`
+- Safeguards: if the key already has the same active plan with remaining credits, a 400 is returned. Pending upgrades also block starting another upgrade.
 
 ### Cancel subscription - `POST /billing/cancel`
 - Header: `X-API-KEY: {{paid_api_key}}` (must have Paystack subscription code/email token)

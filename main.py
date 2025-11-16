@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import time
 import json
+import uuid
 from typing import Dict, Any, Optional, Tuple
 
 try:
@@ -72,14 +73,17 @@ from auth import (
     generate_api_key,
     generate_free_key,
     revoke_api_key,
+    rotate_api_key,
     restore_api_key,
     load_keys,
+    save_keys,
     upgrade_key_tier_by_hash,
     charge_call_for_key,
     SECONDS_PER_MONTH,
     update_key_contact,
     mark_pending_plan,
     find_key_by_email,
+    hash_key,
 )
 from rate_limit import allow_request
 from utils import validate_currency, fetch_rates, fetch_historical_rates
@@ -94,6 +98,7 @@ from transactions import (
     update_transactions_for_key,
     load_transactions,
     get_transactions_for_key,
+    get_pending_transaction_for_key,
 )
 from usage_stats import record_usage_event, get_usage_map
 
@@ -272,6 +277,26 @@ class RevokePayload(BaseModel):
 class RestorePayload(BaseModel):
     api_key: str
     subscription_status: Optional[str] = None
+
+
+class RevokeSelfPayload(BaseModel):
+    api_key: str
+    password: str
+
+
+class RegenerateKeyPayload(BaseModel):
+    api_key: str
+    password: str
+
+
+class RevokeByPrefixPayload(BaseModel):
+    key_prefix: str
+    password: str
+
+
+class RegenerateByPrefixPayload(BaseModel):
+    key_prefix: str
+    password: str
 
 
 class UpgradePayload(BaseModel):
@@ -458,6 +483,54 @@ def _compose_usage_entry(
     }
 
 
+def _get_user_key_record_or_error(raw_key: str, user_id: str) -> Dict[str, Any]:
+    """Fetch a key by raw value and ensure it belongs to the user."""
+    hashed = hash_key(raw_key)
+    data = load_keys()
+    for record in data.get("keys", []):
+        if record.get("key_hash") == hashed and record.get("owner") == user_id:
+            return record
+    raise HTTPException(status_code=404, detail="API key not found for this user")
+
+
+def _get_user_key_by_prefix(user_id: str, key_prefix: str) -> Dict[str, Any]:
+    """Find a key owned by user via key hash prefix."""
+    data = load_keys()
+    for record in data.get("keys", []):
+        key_hash = record.get("key_hash", "")
+        if record.get("owner") == user_id and key_hash.startswith(key_prefix):
+            return record
+    raise HTTPException(status_code=404, detail="API key not found for this user")
+
+
+def _revoke_key_record(record: Dict[str, Any]) -> None:
+    data = load_keys()
+    for rec in data.get("keys", []):
+        if rec.get("key_hash") == record.get("key_hash"):
+            rec["active"] = False
+            save_keys(data)
+            return
+    raise HTTPException(status_code=404, detail="API key not found")
+
+
+def _rotate_key_record(record: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """Rotate key without knowing the raw key."""
+    data = load_keys()
+    for rec in data.get("keys", []):
+        if rec.get("key_hash") != record.get("key_hash"):
+            continue
+        if rec.get("tier") == "free":
+            new_raw = "free_" + uuid.uuid4().hex[:32]
+        else:
+            new_raw = str(uuid.uuid4())
+        rec["key_hash"] = hash_key(new_raw)
+        save_keys(data)
+        updated = dict(rec)
+        updated["key_hash"] = rec["key_hash"]
+        return new_raw, updated
+    raise HTTPException(status_code=404, detail="API key not found")
+
+
 def _start_subscription_checkout(
     *,
     key_hash: str,
@@ -494,6 +567,7 @@ def _start_subscription_checkout(
         amount_naira=plan["price_naira"],
         reference=reference,
         status="pending",
+        authorization_url=auth_url,
     )
     return auth_url, reference
 
@@ -1059,6 +1133,29 @@ def billing_upgrade(
             status_code=400,
             detail="Email, first_name and last_name are required to upgrade.",
         )
+    # Block duplicate/pending upgrades
+    if key.get("pending_plan_code"):
+        pending_txn = get_pending_transaction_for_key(key["key_hash"])
+        if pending_txn:
+            return {
+                "authorization_url": pending_txn.get("authorization_url"),
+                "reference": pending_txn.get("reference"),
+                "plan": plan,
+                "message": "Continue the existing pending payment to activate your plan.",
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="An upgrade is already pending for this key. Complete payment or wait.",
+            )
+    # Block re-purchasing the same active plan unless credits are exhausted
+    if key.get("plan_code") == plan["code"] and key.get("subscription_status") == "active":
+        credits = key.get("credits")
+        if credits is None or credits > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Key already has this active plan. Choose a higher plan or wait for renewal.",
+            )
     # Ensure the key carries the latest contact info
     update_key_contact(key["key_hash"], email=email, first_name=first, last_name=last)
     auth_url, reference = _start_subscription_checkout(
@@ -1432,6 +1529,77 @@ def create_key(
             "subscription_status": "pending",
             "note": "Attach a subscription using /billing/upgrade or /billing/subscribe to enable paid limits. The key stays inactive until billing completes.",
         }
+
+
+@app.post("/user/keys/revoke", tags=["User"])
+def revoke_my_key(
+    payload: RevokeSelfPayload,
+    user: Dict[str, Any] = Depends(session_required),
+) -> Dict[str, Any]:
+    """Revoke a key owned by the logged-in user after password confirmation."""
+    authenticate_user(email=user["email"], password=payload.password)
+    _get_user_key_record_or_error(payload.api_key, user["id"])
+    revoke_api_key(payload.api_key)
+    return {"status": "revoked", "message": "API key has been disabled."}
+
+
+@app.post("/user/keys/regenerate", tags=["User"])
+def regenerate_my_key(
+    payload: RegenerateKeyPayload,
+    user: Dict[str, Any] = Depends(session_required),
+) -> Dict[str, Any]:
+    """Rotate a user's API key (invalidates the old key) after password confirmation."""
+    authenticate_user(email=user["email"], password=payload.password)
+    record = _get_user_key_record_or_error(payload.api_key, user["id"])
+    new_raw, updated_record = rotate_api_key(payload.api_key)
+    return {
+        "message": "API key rotated. Store the new key securely; the old key no longer works.",
+        "api_key": new_raw,
+        "tier": updated_record.get("tier"),
+        "plan_code": updated_record.get("plan_code"),
+        "subscription_status": updated_record.get("subscription_status"),
+        "contact": {
+            "email": record.get("email"),
+            "first_name": record.get("first_name"),
+            "last_name": record.get("last_name"),
+        },
+    }
+
+
+@app.post("/user/keys/revoke-by-prefix", tags=["User"])
+def revoke_my_key_by_prefix(
+    payload: RevokeByPrefixPayload,
+    user: Dict[str, Any] = Depends(session_required),
+) -> Dict[str, Any]:
+    """Revoke a key using its prefix (for users who misplaced the raw key)."""
+    authenticate_user(email=user["email"], password=payload.password)
+    record = _get_user_key_by_prefix(user["id"], payload.key_prefix)
+    _revoke_key_record(record)
+    return {"status": "revoked", "key_prefix": payload.key_prefix + "..."}
+
+
+@app.post("/user/keys/regenerate-by-prefix", tags=["User"])
+def regenerate_my_key_by_prefix(
+    payload: RegenerateByPrefixPayload,
+    user: Dict[str, Any] = Depends(session_required),
+) -> Dict[str, Any]:
+    """Rotate a key using its prefix (no need to provide the raw key)."""
+    authenticate_user(email=user["email"], password=payload.password)
+    record = _get_user_key_by_prefix(user["id"], payload.key_prefix)
+    new_raw, updated_record = _rotate_key_record(record)
+    return {
+        "message": "API key rotated. Store the new key securely; the old key no longer works.",
+        "api_key": new_raw,
+        "tier": updated_record.get("tier"),
+        "plan_code": updated_record.get("plan_code"),
+        "subscription_status": updated_record.get("subscription_status"),
+        "key_prefix": (updated_record.get("key_hash") or "")[:8] + ".",
+        "contact": {
+            "email": updated_record.get("email"),
+            "first_name": updated_record.get("first_name"),
+            "last_name": updated_record.get("last_name"),
+        },
+    }
 
 
 @app.get("/user/keys", tags=["User"])

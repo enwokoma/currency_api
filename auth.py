@@ -364,6 +364,29 @@ def revoke_api_key(raw_key: str) -> None:
     raise HTTPException(status_code=404, detail="API key not found")
 
 
+def rotate_api_key(raw_key: str) -> Tuple[str, Dict[str, Any]]:
+    """Generate a new raw key and swap the hash on an existing record.
+
+    Returns:
+        A tuple of (new_raw_key, updated_record_copy)
+    """
+    hashed = hash_key(raw_key)
+    data = load_keys()
+    for record in data.get("keys", []):
+        if record.get("key_hash") != hashed:
+            continue
+        if record.get("tier") == "free":
+            new_raw = "free_" + uuid.uuid4().hex[:32]
+        else:
+            new_raw = str(uuid.uuid4())
+        record["key_hash"] = hash_key(new_raw)
+        save_keys(data)
+        updated = dict(record)
+        updated["key_hash"] = record["key_hash"]
+        return new_raw, updated
+    raise HTTPException(status_code=404, detail="API key not found for rotation")
+
+
 def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> Dict[str, Any]:
     """Reactivate a previously revoked or inactive key."""
     hashed = hash_key(raw_key)

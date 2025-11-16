@@ -83,6 +83,7 @@ def record_transaction(
     status: str = "pending",
     subscription_code: Optional[str] = None,
     email_token: Optional[str] = None,
+    authorization_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Add a new transaction record to the store.
 
@@ -111,6 +112,7 @@ def record_transaction(
         "status": status,
         "subscription_code": subscription_code,
         "email_token": email_token,
+        "authorization_url": authorization_url,
         "created_at": time.time(),
         "updated_at": time.time(),
     }
@@ -159,3 +161,17 @@ def get_transactions_for_key(api_key_hash: str) -> List[Dict[str, Any]]:
     """
     data = load_transactions()
     return [t for t in data.get("transactions", []) if t.get("api_key_hash") == api_key_hash]
+
+
+def get_pending_transaction_for_key(api_key_hash: str) -> Optional[Dict[str, Any]]:
+    """Return the latest pending transaction for a key, if any."""
+    txns = [
+        t
+        for t in load_transactions().get("transactions", [])
+        if t.get("api_key_hash") == api_key_hash and t.get("status") == "pending"
+    ]
+    if not txns:
+        return None
+    # Return the most recent pending transaction
+    txns.sort(key=lambda t: t.get("created_at", 0), reverse=True)
+    return txns[0]

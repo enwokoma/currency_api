@@ -133,6 +133,66 @@
           }
         },
         {
+          "name": "Revoke My Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_key\": \"{{free_api_key}}\",\n  \"password\": \"{{user_password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/user/keys/revoke", "host": ["{{base_url}}"], "path": ["user", "keys", "revoke"] }
+          }
+        },
+        {
+          "name": "Regenerate My Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_key\": \"{{free_api_key}}\",\n  \"password\": \"{{user_password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/user/keys/regenerate", "host": ["{{base_url}}"], "path": ["user", "keys", "regenerate"] }
+          }
+        },
+        {
+          "name": "Revoke My Key (by prefix)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key_prefix\": \"a682fc97\",\n  \"password\": \"{{user_password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/user/keys/revoke-by-prefix", "host": ["{{base_url}}"], "path": ["user", "keys", "revoke-by-prefix"] }
+          }
+        },
+        {
+          "name": "Regenerate My Key (by prefix)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key_prefix\": \"a682fc97\",\n  \"password\": \"{{user_password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/user/keys/regenerate-by-prefix", "host": ["{{base_url}}"], "path": ["user", "keys", "regenerate-by-prefix"] }
+          }
+        },
+        {
           "name": "Usage (API Key)",
           "request": {
             "method": "GET",

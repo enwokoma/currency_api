@@ -64,6 +64,10 @@ Full request/response samples for every endpoint live in `DOCS.md`.
   - `base_url` (e.g., `http://localhost:8000`)
   - `admin_token`, `session_token`, `free_api_key`, `paid_api_key`, `plan_code`
   - Optional: `user_first_name`, `user_last_name`, `user_email`, `user_password` (default bodies use these). Override contact with `contact_email`, `contact_first_name`, `contact_last_name` only if you want a different billing contact.
+- Lost key recovery (session + password required):
+  - List prefixes: `GET /user/keys`
+  - Revoke: `POST /user/keys/revoke` (raw key) or `POST /user/keys/revoke-by-prefix`
+  - Rotate: `POST /user/keys/regenerate` (raw key) or `POST /user/keys/regenerate-by-prefix` (returns new raw key)
 
 ---
 
