@@ -461,6 +461,7 @@ def _compose_usage_entry(
         "first_name": record.get("first_name"),
         "last_name": record.get("last_name"),
         "active": record.get("active", True),
+        "revoked": bool(record.get("revoked_at")),
         "tier": record.get("tier", "paid"),
         "plan_code": record.get("plan_code"),
         "pending_plan_code": record.get("pending_plan_code"),
@@ -475,6 +476,7 @@ def _compose_usage_entry(
         "key_prefix": (record.get("key_hash") or "")[:8] + ".",
         "created_at": to_wat_iso(record.get("created_at")),
         "upgraded_at": to_wat_iso(record.get("upgraded_at")),
+        "revoked_at": to_wat_iso(record.get("revoked_at")),
         "total_requests": tracked.get("total_requests", 0),
         "billable_requests": tracked.get("billable_requests", 0),
         "credits_used": tracked.get("credits_used", 0),
@@ -508,6 +510,9 @@ def _revoke_key_record(record: Dict[str, Any]) -> None:
     for rec in data.get("keys", []):
         if rec.get("key_hash") == record.get("key_hash"):
             rec["active"] = False
+            rec["subscription_status"] = "revoked"
+            rec["pending_plan_code"] = None
+            rec["revoked_at"] = time.time()
             save_keys(data)
             return
     raise HTTPException(status_code=404, detail="API key not found")
@@ -704,8 +709,11 @@ def billing_key_required(request: Request) -> Dict[str, Any]:
     """Allow pending/inactive keys to initiate billing flows."""
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
     key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
-    # Hard-block revoked keys that are not merely pending activation
-    if not key_record.get("active", True) and key_record.get("subscription_status") not in {"pending", None}:
+    # Hard-block revoked or inactive keys that are not merely pending activation
+    if (
+        not key_record.get("active", True)
+        and key_record.get("subscription_status") not in {"pending", None}
+    ) or key_record.get("revoked_at"):
         raise HTTPException(
             status_code=403,
             detail="This key is inactive. Contact support or generate a new key.",
@@ -836,6 +844,8 @@ def get_usage(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]
         "rate_limits": {"per_minute": per_minute, "per_day": per_day},
         "remaining_credits": credits,
         "credits_reset_at": next_reset,
+        "revoked": bool(key.get("revoked_at")),
+        "revoked_at": to_wat_iso(key.get("revoked_at")),
     }
 
 
@@ -1074,7 +1084,7 @@ def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
         payload.email, payload.first_name, payload.last_name
     )
     # Ensure the email is not already tied to another key
-    existing = find_key_by_email(email)
+    existing = find_key_by_email(email, include_inactive=False)
     if existing:
         raise HTTPException(
             status_code=400,
@@ -1627,6 +1637,7 @@ def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str
                     "first_name": record.get("first_name"),
                     "last_name": record.get("last_name"),
                     "created_at": to_wat_iso(record.get("created_at")),
+                    "revoked_at": to_wat_iso(record.get("revoked_at")),
                     "upgraded_at": to_wat_iso(record.get("upgraded_at")),
                     "key_prefix": record.get("key_hash", "")[:8] + ".",
                 }
@@ -1707,6 +1718,7 @@ def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                 # Convert numeric timestamps to ISO strings for display
                 "created_at": to_wat_iso(key.get("created_at")),
                 "upgraded_at": to_wat_iso(key.get("upgraded_at")),
+                "revoked_at": to_wat_iso(key.get("revoked_at")),
                 "key_prefix": key.get("key_hash", "")[:8] + ".",
             }
         )

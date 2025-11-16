@@ -128,13 +128,17 @@ def _validate_contact(email: str, first_name: str, last_name: str) -> Dict[str, 
 
 
 def assert_unique_key_email(email: str, skip_key_hash: Optional[str] = None) -> None:
-    """Ensure no other key already uses the given email."""
+    """Ensure no other *active* key already uses the given email."""
     email_norm = normalize_email(email)
     data = load_keys()
     for record in data.get("keys", []):
         if skip_key_hash and record.get("key_hash") == skip_key_hash:
             continue
-        if record.get("email") and record.get("email") == email_norm:
+        if (
+            record.get("email")
+            and record.get("email") == email_norm
+            and record.get("active", True)
+        ):
             prefix = (record.get("key_hash") or "")[:8]
             raise HTTPException(
                 status_code=400,
@@ -142,12 +146,12 @@ def assert_unique_key_email(email: str, skip_key_hash: Optional[str] = None) -> 
             )
 
 
-def find_key_by_email(email: str) -> Optional[Dict[str, Any]]:
+def find_key_by_email(email: str, *, include_inactive: bool = True) -> Optional[Dict[str, Any]]:
     """Return the first key record matching the provided email (if any)."""
     email_norm = normalize_email(email)
     data = load_keys()
     for record in data.get("keys", []):
-        if record.get("email") == email_norm:
+        if record.get("email") == email_norm and (include_inactive or record.get("active", True)):
             copy = dict(record)
             copy["key_hash"] = record.get("key_hash")
             return copy
@@ -359,6 +363,9 @@ def revoke_api_key(raw_key: str) -> None:
     for record in data.get("keys", []):
         if record.get("key_hash") == hashed:
             record["active"] = False
+            record["subscription_status"] = "revoked"
+            record["pending_plan_code"] = None
+            record["revoked_at"] = time.time()
             save_keys(data)
             return
     raise HTTPException(status_code=404, detail="API key not found")
@@ -396,6 +403,7 @@ def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> 
             record["active"] = True
             if subscription_status is not None:
                 record["subscription_status"] = subscription_status
+            record.pop("revoked_at", None)
             save_keys(data)
             record_copy = dict(record)
             record_copy["key_hash"] = hashed
