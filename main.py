@@ -93,6 +93,7 @@ from transactions import (
     load_transactions,
     get_transactions_for_key,
 )
+from usage_stats import record_usage_event, get_usage_map
 
 # Import user management helpers. We avoid circular imports by placing this
 # import at module level rather than within endpoint functions. The users
@@ -269,13 +270,17 @@ class UpgradePayload(BaseModel):
     last_name: Optional[str] = None
 
 
-class CreateKeyPayload(KeyContact):
+class CreateKeyPayload(BaseModel):
     """Payload for creating an API key for a user.
 
-    The ``tier`` field determines whether a free or paid key should
-    be created. Valid values are ``"free"`` and ``"paid"``.
+    Contact fields are optional; when omitted, the current user's
+    profile (email, first_name, last_name) is used so that contact
+    metadata always matches the authenticated user.
     """
 
+    email: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     tier: str
 
 
@@ -391,6 +396,57 @@ def _get_plan_or_error(plan_code: str) -> Dict[str, Any]:
     return plan
 
 
+def _rate_limits_for_record(record: Dict[str, Any]) -> Tuple[int | None, int | None]:
+    """Determine rate limits for a key record."""
+    tier = record.get("tier", "paid")
+    plan_code = record.get("plan_code")
+    if tier == "free":
+        return FREE_REQUESTS_PER_MINUTE, FREE_REQUESTS_PER_DAY
+    if plan_code:
+        plan = next((p for p in PLANS if p["code"] == plan_code), None)
+        if plan:
+            return (
+                plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE),
+                plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY),
+            )
+    return DEFAULT_PAID_REQUESTS_PER_MINUTE, DEFAULT_PAID_REQUESTS_PER_DAY
+
+
+def _compose_usage_entry(
+    record: Dict[str, Any],
+    tracked: Dict[str, Any],
+    per_minute: int | None,
+    per_day: int | None,
+) -> Dict[str, Any]:
+    """Combine key metadata with tracked usage counters."""
+    return {
+        "owner": record.get("owner"),
+        "email": record.get("email"),
+        "first_name": record.get("first_name"),
+        "last_name": record.get("last_name"),
+        "active": record.get("active", True),
+        "tier": record.get("tier", "paid"),
+        "plan_code": record.get("plan_code"),
+        "pending_plan_code": record.get("pending_plan_code"),
+        "subscription_status": record.get("subscription_status"),
+        "remaining_credits": record.get("credits"),
+        "credits_reset_at": record.get("credits_reset_at"),
+        "credits_reset_at_wat": to_wat_iso(record.get("credits_reset_at")),
+        "rate_limits": {
+            "per_minute": per_minute,
+            "per_day": per_day,
+        },
+        "key_prefix": (record.get("key_hash") or "")[:8] + ".",
+        "created_at": to_wat_iso(record.get("created_at")),
+        "upgraded_at": to_wat_iso(record.get("upgraded_at")),
+        "total_requests": tracked.get("total_requests", 0),
+        "billable_requests": tracked.get("billable_requests", 0),
+        "credits_used": tracked.get("credits_used", 0),
+        "first_request_at": to_wat_iso(tracked.get("first_request_at")),
+        "last_request_at": to_wat_iso(tracked.get("last_request_at")),
+    }
+
+
 def _start_subscription_checkout(
     *,
     key_hash: str,
@@ -493,29 +549,7 @@ def api_key_required(request: Request) -> Dict[str, Any]:
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
     key_record = validate_api_key(raw_key)
     tier = key_record.get("tier", "paid")
-    plan_code = key_record.get("plan_code")
-    # Determine rate limits based on tier and plan.
-    # Free tier keys always use free limits. Paid keys use plan limits if
-    # available, otherwise default to the paid defaults. We do not treat
-    # paid keys with no plan_code as free.
-    if tier == "free":
-        per_minute = FREE_REQUESTS_PER_MINUTE
-        per_day = FREE_REQUESTS_PER_DAY
-    else:
-        # Paid tier
-        if plan_code:
-            plan = next((p for p in PLANS if p["code"] == plan_code), None)
-            if plan:
-                per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
-                per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
-            else:
-                # Unknown plan code -> use default paid limits
-                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-        else:
-            # No plan bound -> default paid limits
-            per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-            per_day = DEFAULT_PAID_REQUESTS_PER_DAY
+    per_minute, per_day = _rate_limits_for_record(key_record)
     # Enforce rate limits
     allow_request(
         key_hash=key_record["key_hash"],
@@ -523,10 +557,33 @@ def api_key_required(request: Request) -> Dict[str, Any]:
         per_day=per_day,
     )
     # Charge credits
-    charge_call_for_key(
+    updated_record, billed = charge_call_for_key(
         key_record=key_record,
         free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
         plans=PLANS,
+    )
+    record_usage_event(
+        key_hash=updated_record.get("key_hash"),
+        owner=updated_record.get("owner"),
+        email=updated_record.get("email"),
+        first_name=updated_record.get("first_name"),
+        last_name=updated_record.get("last_name"),
+        tier=updated_record.get("tier", tier),
+        plan_code=updated_record.get("plan_code"),
+        subscription_status=updated_record.get("subscription_status"),
+        billed=billed,
+        remaining_credits=updated_record.get("credits"),
+        credits_reset_at=updated_record.get("credits_reset_at"),
+    )
+    # Keep caller-visible record in sync with the latest persisted data
+    key_record.update(
+        {
+            "plan_code": updated_record.get("plan_code"),
+            "pending_plan_code": updated_record.get("pending_plan_code"),
+            "subscription_status": updated_record.get("subscription_status"),
+            "credits": updated_record.get("credits"),
+            "credits_reset_at": updated_record.get("credits_reset_at"),
+        }
     )
     return key_record
 
@@ -538,6 +595,19 @@ def paid_key_required(request: Request) -> Dict[str, Any]:
         raise HTTPException(
             status_code=403,
             detail="This endpoint is available to paid subscriptions only.",
+        )
+    return key_record
+
+
+def billing_key_required(request: Request) -> Dict[str, Any]:
+    """Allow pending/inactive keys to initiate billing flows."""
+    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
+    key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
+    # Hard-block revoked keys that are not merely pending activation
+    if not key_record.get("active", True) and key_record.get("subscription_status") != "pending":
+        raise HTTPException(
+            status_code=403,
+            detail="This key is inactive. Contact support or generate a new key.",
         )
     return key_record
 
@@ -685,32 +755,14 @@ def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
     from auth import load_keys, save_keys
 
     data = load_keys()
+    usage_map = get_usage_map()
     now_ts = time.time()  # current epoch time
     usage: list[Dict[str, Any]] = []
     modified = False
     for record in data.get("keys", []):
         tier = record.get("tier", "paid")
         plan_code = record.get("plan_code")
-        # ----------------------------
-        # Determine per-minute and per-day limits
-        # ----------------------------
-        if tier == "free":
-            per_minute = FREE_REQUESTS_PER_MINUTE
-            per_day = FREE_REQUESTS_PER_DAY
-        else:
-            if plan_code:
-                plan = next((p for p in PLANS if p["code"] == plan_code), None)
-                if plan:
-                    per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
-                    per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
-                else:
-                    # Unknown plan -> default paid limits
-                    per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                    per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-            else:
-                # Paid but no plan bound -> default paid limits
-                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
+        per_minute, per_day = _rate_limits_for_record(record)
 
         # ----------------------------
         # Reset credits if the reset period has expired
@@ -744,25 +796,8 @@ def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
         # ----------------------------
         # Append usage entry for this key
         # ----------------------------
-        usage.append(
-            {
-                "owner": record.get("owner"),
-                "active": record.get("active", True),
-                "tier": tier,
-                "plan_code": plan_code,
-                "remaining_credits": record.get("credits"),
-                # credits_reset_at remains as epoch seconds for internal use
-                "credits_reset_at": record.get("credits_reset_at"),
-                "rate_limits": {
-                    "per_minute": per_minute,
-                    "per_day": per_day,
-                },
-                "key_prefix": record.get("key_hash", "")[:8] + "...",
-                # Convert created_at/upgraded_at timestamps to ISO strings
-                "created_at": to_wat_iso(record.get("created_at")),
-                "upgraded_at": to_wat_iso(record.get("upgraded_at")),
-            }
-        )
+        tracked = usage_map.get(record.get("key_hash"), {}) or {}
+        usage.append(_compose_usage_entry(record, tracked, per_minute, per_day))
 
     # Persist any modifications (credit resets)
     if modified:
@@ -979,7 +1014,7 @@ def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
 @app.post("/billing/upgrade", tags=["Billing"], response_model=Dict[str, Any])
 def billing_upgrade(
     payload: UpgradePayload,
-    key: Dict[str, Any] = Depends(api_key_required),
+    key: Dict[str, Any] = Depends(billing_key_required),
 ) -> Dict[str, Any]:
     """Start a Paystack transaction to upgrade a free key to a paid plan.
 
@@ -1304,23 +1339,26 @@ def create_key(
         HTTPException: If the tier is invalid.
     """
     tier_lower = payload.tier.strip().lower()
-    email = payload.email.strip().lower()
+    email_raw = payload.email or user.get("email") or ""
+    first_raw = payload.first_name or user.get("first_name") or ""
+    last_raw = payload.last_name or user.get("last_name") or ""
+    email, first_name, last_name = _normalize_contact_fields(email_raw, first_raw, last_raw)
     if tier_lower not in {"free", "paid"}:
         raise HTTPException(status_code=400, detail="Invalid key tier specified")
     if tier_lower == "free":
         raw_key = generate_free_key(
             owner=user["id"],
             email=email,
-            first_name=payload.first_name,
-            last_name=payload.last_name,
+            first_name=first_name,
+            last_name=last_name,
         )
         return {
             "tier": "free",
             "api_key": raw_key,
             "contact": {
                 "email": email,
-                "first_name": payload.first_name,
-                "last_name": payload.last_name,
+                "first_name": first_name,
+                "last_name": last_name,
             },
         }
     else:
@@ -1331,18 +1369,22 @@ def create_key(
         raw_key = generate_api_key(
             owner=user["id"],
             email=email,
-            first_name=payload.first_name,
-            last_name=payload.last_name,
+            first_name=first_name,
+            last_name=last_name,
+            active=False,
+            subscription_status="pending",
         )
         return {
             "tier": "paid",
             "api_key": raw_key,
             "contact": {
                 "email": email,
-                "first_name": payload.first_name,
-                "last_name": payload.last_name,
+                "first_name": first_name,
+                "last_name": last_name,
             },
-            "note": "Attach a subscription using /billing/upgrade or /billing/subscribe to enable paid limits.",
+            "active": False,
+            "subscription_status": "pending",
+            "note": "Attach a subscription using /billing/upgrade or /billing/subscribe to enable paid limits. The key stays inactive until billing completes.",
         }
 
 
@@ -1376,6 +1418,30 @@ def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str
                 }
             )
     return {"keys": owned}
+
+
+@app.get("/usage", tags=["Utility"])
+def usage_snapshot(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]:
+    """Return usage details for the calling API key."""
+    usage_map = get_usage_map()
+    tracked = usage_map.get(key.get("key_hash"), {}) or {}
+    per_minute, per_day = _rate_limits_for_record(key)
+    return {"usage": _compose_usage_entry(key, tracked, per_minute, per_day)}
+
+
+@app.get("/user/usage", tags=["User"])
+def list_user_usage(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
+    """Return usage details for all keys owned by the session user."""
+    data = load_keys()
+    usage_map = get_usage_map()
+    summaries = []
+    for record in data.get("keys", []):
+        if record.get("owner") != user["id"]:
+            continue
+        per_minute, per_day = _rate_limits_for_record(record)
+        tracked = usage_map.get(record.get("key_hash"), {}) or {}
+        summaries.append(_compose_usage_entry(record, tracked, per_minute, per_day))
+    return {"usage": summaries}
 
 
 # ---------------------------------------------------------------------------

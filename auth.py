@@ -296,7 +296,12 @@ def generate_free_key(
     return raw
 
 
-def validate_api_key(raw_key: Optional[str]) -> Dict[str, Any]:
+def validate_api_key(
+    raw_key: Optional[str],
+    *,
+    allow_inactive: bool = False,
+    allow_unpaid: bool = False,
+) -> Dict[str, Any]:
     """Validate a raw API key and return its record.
 
     Raises ``HTTPException`` if the key is missing, invalid or
@@ -311,7 +316,10 @@ def validate_api_key(raw_key: Optional[str]) -> Dict[str, Any]:
         if record.get("key_hash") == hashed:
             if not record.get("active", True):
                 status = record.get("subscription_status")
-                if status == "pending":
+                if status == "pending" and allow_inactive:
+                    # Pending keys are allowed to proceed only when explicitly requested
+                    pass
+                elif status == "pending":
                     raise HTTPException(
                         status_code=402,
                         detail="Subscription is pending activation for this key",
@@ -328,6 +336,15 @@ def validate_api_key(raw_key: Optional[str]) -> Dict[str, Any]:
                 record["first_name"] = None
             if "last_name" not in record:
                 record["last_name"] = None
+            # Enforce paid subscription state unless explicitly permitted
+            if record["tier"] == "paid":
+                subscription_status = record.get("subscription_status")
+                has_plan = record.get("plan_code") is not None
+                if (subscription_status != "active" or not has_plan) and not allow_unpaid:
+                    raise HTTPException(
+                        status_code=402,
+                        detail="Paid subscription required to use this key. Complete billing to activate.",
+                    )
             record_copy = dict(record)
             record_copy["key_hash"] = hashed
             return record_copy
@@ -429,7 +446,7 @@ def charge_call_for_key(
     key_record: Dict[str, Any],
     free_monthly_credits: int,
     plans: List[Dict[str, Any]],
-) -> None:
+) -> tuple[Dict[str, Any], bool]:
     """Decrement the credits counter for a given key.
 
     This method ensures that free keys and paid keys consume
@@ -446,6 +463,8 @@ def charge_call_for_key(
         raise HTTPException(status_code=500, detail="Key hash missing from record")
     data = load_keys()
     updated = False
+    billed = False
+    updated_record: Dict[str, Any] | None = None
     for record in data.get("keys", []):
         if record.get("key_hash") != key_hash:
             continue
@@ -497,10 +516,12 @@ def charge_call_for_key(
             credits -= 1
             record["credits"] = credits
             updated = True
+            billed = True
         else:
             # Paid tier logic
             # No plan: unlimited credits
             if plan is None:
+                updated_record = dict(record)
                 break
             # Initialise credits from plan if missing
             if credits is None:
@@ -508,6 +529,7 @@ def charge_call_for_key(
                 record["credits"] = credits
             # If credits is None after plan, treat as unlimited
             if credits is None:
+                updated_record = dict(record)
                 break
             if credits <= 0:
                 raise HTTPException(
@@ -517,6 +539,13 @@ def charge_call_for_key(
             credits -= 1
             record["credits"] = credits
             updated = True
+            billed = True
+        updated_record = dict(record)
         break
     if updated:
         save_keys(data)
+    if updated_record is None:
+        raise HTTPException(status_code=404, detail="API key record missing for billing")
+    # Ensure the key hash is present on the returned record
+    updated_record["key_hash"] = key_hash
+    return updated_record, billed

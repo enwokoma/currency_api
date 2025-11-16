@@ -10,6 +10,7 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
 - Direct paid provisioning via `POST /billing/subscribe` (no need to create a free key first), plus upgrades for existing keys and `POST /billing/cancel` to disable a subscription on Paystack and downgrade to free.
 - Currency lookups and conversions now accept **JSON bodies** (`POST /rate`, `/convert`, `/rates`) with historical endpoints (`/rate/historical`, `/convert/historical`, `/rates/historical`) available exclusively to paid keys.
 - Paystack webhook handling upgrades/downgrades keys, records transactions, and captures subscription codes for cancellation.
+- Per-key usage counters with `/usage`, `/user/usage`, and `/admin/usage` to see request counts, billable calls, and remaining credits.
 - Built-in user management (register/verify/login/logout), session tokens, admin token-protected endpoints, and JSON-based persistence (`keys.json`, `transactions.json`, `users.json`, `sessions.json`).
 
 ---
@@ -38,7 +39,7 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
 - **Users**: `POST /auth/register` -> `POST /auth/verify-email` -> `POST /auth/login` (stores session token in `X-SESSION-TOKEN`).
 - **Key creation (requires email/name)**:
   - Public: `POST /auth/free-key` (free tier).
-  - Authenticated: `POST /auth/create-key` with `tier` = `free` or `paid`.
+  - Authenticated: `POST /auth/create-key` with `tier` = `free` or `paid` (paid keys remain inactive with `subscription_status=pending` until upgraded via billing).
   - Admin: `POST /admin/generate-key` (paid, optional plan), `POST /admin/revoke-key`.
   - Listing: `GET /user/keys`, `GET /admin/keys`.
 - **Billing**:
@@ -62,7 +63,7 @@ Full request/response samples for every endpoint live in `DOCS.md`.
 - **Postman collection**: Import `postman_collection.json` and set variables:
   - `base_url` (e.g., `http://localhost:8000`)
   - `admin_token`, `session_token`, `free_api_key`, `paid_api_key`, `plan_code`
-  - Optional: `user_email`, `user_password`, `contact_email`, `contact_first_name`, `contact_last_name`
+  - Optional: `user_first_name`, `user_last_name`, `user_email`, `user_password` (default bodies use these). Override contact with `contact_email`, `contact_first_name`, `contact_last_name` only if you want a different billing contact.
 
 ---
 
@@ -79,5 +80,6 @@ The user management smoke tests have been executed with the project virtual envi
 ## Data & Rate Limits
 
 - Keys, users, sessions, and transactions are stored in JSON files in the project root (`keys.json`, `users.json`, `sessions.json`, `transactions.json`).
+- Per-key request counters live in `usage.json` and power `/usage`, `/user/usage`, and `/admin/usage`.
 - Rate limits and monthly credits are enforced per key tier/plan (free: 10 req/min, 200/day by default; paid limits derive from plan definitions in `main.py`).
 - Free and paid credits reset automatically each month; pending subscriptions mark keys accordingly until Paystack confirms.

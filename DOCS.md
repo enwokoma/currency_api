@@ -90,25 +90,28 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 
 ### Create key (session) - `POST /auth/create-key`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
-- Body includes tier and contact:
+- Body includes tier; contact defaults to the logged-in user's profile if omitted:
 ```json
-{ 
-  "tier": "paid", 
-  "email": "paid.user@example.com", 
-  "first_name": "Paid", 
+{
+  "tier": "paid",
+  "email": "paid.user@example.com",
+  "first_name": "Paid",
   "last_name": "User"
 }
 ```
 **Response 200** - returns 
 ```json
-{ 
-  "tier": "paid", 
+{
+  "tier": "paid",
   "api_key": "<uuid>",
   "contact": {
     "email": "paid.user@example.com",
     "first_name": "Paid",
     "last_name": "User"
-  }
+  },
+  "active": false,
+  "subscription_status": "pending",
+  "note": "Attach a subscription using /billing/upgrade or /billing/subscribe to enable paid limits. The key stays inactive until billing completes."
 }
 ```
 
@@ -189,6 +192,7 @@ Contact fields overwrite the stored contact (and remain unique).
 ### Paystack webhook - `POST /paystack/webhook`
 - Validates `x-paystack-signature`, upgrades/downgrades keys, stores subscription codes, and marks transactions `success|failed|cancelled`.
 - **Response 200** - `{ "status": "ok" }`
+- Configure your Paystack dashboard to point webhooks at `/paystack/webhook`. The handler verifies the signature using `PAYSTACK_SECRET_KEY`. All events are recorded in `transactions.json`; you can poll `GET /transactions` (per key) or `GET /admin/transactions` to monitor incoming notifications and statuses.
 
 ---
 
@@ -249,5 +253,24 @@ Contact fields overwrite the stored contact (and remain unique).
 ## 6) Utility
 
 - **Health**: `GET /health` -> `{ "status": "ok" }`
-- **Usage snapshot**: `GET /me/usage` and `GET /admin/usage` report remaining credits and rate limits for the calling key.
+- **Usage snapshot**: `GET /usage` (API key), `GET /user/usage` (session), and `GET /admin/usage` report request counts, remaining credits, and rate limits.
 - **Data files**: `keys.json`, `transactions.json`, `users.json`, `sessions.json`, `admin_token.txt`. These are recreated automatically if removed.
+
+### Usage endpoints
+- `GET /usage` (header `X-API-KEY`) returns usage for the calling key:
+```json
+{
+  "usage": {
+    "tier": "free",
+    "subscription_status": "free",
+    "remaining_credits": 198,
+    "total_requests": 12,
+    "billable_requests": 12,
+    "rate_limits": { "per_minute": 10, "per_day": 200 },
+    "last_request_at": "2025-11-16T17:30:10.123",
+    "key_prefix": "abcd1234."
+  }
+}
+```
+- `GET /user/usage` (header `X-SESSION-TOKEN`) lists usage for all keys owned by the logged-in user.
+- `GET /admin/usage` (header `X-ADMIN-TOKEN`) lists every key with owner/contact, rate limits, credits, and usage counters.
