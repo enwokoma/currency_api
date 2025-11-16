@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 try:
-    # Attempt to import orjson and the high‑performance response class.
+    # Attempt to import orjson and the high-performance response class.
     import orjson  # type: ignore
     from fastapi.responses import ORJSONResponse
 except ImportError:
@@ -75,13 +75,17 @@ from auth import (
     upgrade_key_tier_by_hash,
     charge_call_for_key,
     SECONDS_PER_MONTH,
+    update_key_contact,
+    mark_pending_plan,
+    find_key_by_email,
 )
 from rate_limit import allow_request
-from utils import validate_currency, fetch_rates
+from utils import validate_currency, fetch_rates, fetch_historical_rates
 from billing import (
     initialize_transaction,
     verify_paystack_signature,
     extract_webhook_info,
+    disable_subscription,
 )
 from transactions import (
     record_transaction,
@@ -111,7 +115,7 @@ try:
     from dotenv import load_dotenv  # type: ignore
     load_dotenv()
 except ImportError:
-    # python‑dotenv is optional; environment variables can still be provided
+    # python-dotenv is optional; environment variables can still be provided
     pass
 
 
@@ -140,7 +144,7 @@ def _load_or_create_admin_token() -> str:
         fh.write(token)
     print(
         "\n=============================================\n"
-        " 🔐 NEW ADMIN TOKEN GENERATED\n"
+        "  NEW ADMIN TOKEN GENERATED\n"
         f" Your Admin Token: {token}\n"
         " (Saved to admin_token.txt)\n"
         "=============================================\n"
@@ -242,8 +246,16 @@ def to_wat_iso(value: Any) -> Any:
 
 
 # Pydantic models for request bodies
-class OwnerPayload(BaseModel):
+class KeyContact(BaseModel):
+    email: str
+    first_name: str
+    last_name: str
+
+
+class OwnerPayload(KeyContact):
     owner: str
+    plan_code: Optional[str] = None
+    activate: bool = True
 
 
 class RevokePayload(BaseModel):
@@ -251,8 +263,57 @@ class RevokePayload(BaseModel):
 
 
 class UpgradePayload(BaseModel):
-    email: str
     plan_code: str
+    email: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+
+class CreateKeyPayload(KeyContact):
+    """Payload for creating an API key for a user.
+
+    The ``tier`` field determines whether a free or paid key should
+    be created. Valid values are ``"free"`` and ``"paid"``.
+    """
+
+    tier: str
+
+
+class FreeKeyPayload(KeyContact):
+    """Public free-key creation payload."""
+
+
+class SubscribePayload(KeyContact):
+    """Direct paid subscription payload (without requiring an existing key)."""
+
+    plan_code: str
+    owner: Optional[str] = None  # Optional identifier (e.g., user id) to tag the key
+
+
+class RateRequest(BaseModel):
+    from_currency: str
+    to_currency: str
+
+
+class ConvertRequest(RateRequest):
+    amount: float
+
+
+class BaseRatesRequest(BaseModel):
+    base_currency: str
+
+
+class HistoricalRateRequest(RateRequest):
+    date: str
+
+
+class HistoricalConvertRequest(HistoricalRateRequest):
+    amount: float
+
+
+class HistoricalBaseRatesRequest(BaseModel):
+    base_currency: str
+    date: str
 
 # ---------------------------------------------------------------------------
 # User management models
@@ -300,14 +361,74 @@ class LoginPayload(BaseModel):
     password: str
 
 
-class CreateKeyPayload(BaseModel):
-    """Payload for creating an API key for a user.
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
-    The ``tier`` field determines whether a free or paid key should
-    be created. Valid values are ``"free"`` and ``"paid"``.
-    """
+def _normalize_contact_fields(email: str, first_name: str, last_name: str) -> tuple[str, str, str]:
+    """Normalize and validate contact details."""
+    email_norm = email.strip().lower()
+    first = first_name.strip()
+    last = last_name.strip()
+    if not email_norm:
+        raise HTTPException(status_code=400, detail="Email is required")
+    if not first or not last:
+        raise HTTPException(status_code=400, detail="First name and last name are required")
+    return email_norm, first, last
 
-    tier: str
+
+def _get_plan_or_error(plan_code: str) -> Dict[str, Any]:
+    """Return a plan definition or raise HTTP 400."""
+    plan = next((p for p in PLANS if p["code"] == plan_code), None)
+    if not plan:
+        raise HTTPException(status_code=400, detail="Unknown plan_code")
+    paystack_code = plan.get("paystack_plan_code")
+    if not paystack_code:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paystack plan code is not configured for plan '{plan['code']}'",
+        )
+    return plan
+
+
+def _start_subscription_checkout(
+    *,
+    key_hash: str,
+    plan: Dict[str, Any],
+    email: str,
+    first_name: str,
+    last_name: str,
+    deactivate: bool = False,
+) -> Tuple[str, str]:
+    """Mark a key as pending a plan and start Paystack checkout."""
+    paystack_code = plan.get("paystack_plan_code")
+    if not paystack_code:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paystack plan code is not configured for plan '{plan['code']}'",
+        )
+    # Flag the key as pending upgrade (optionally deactivate until payment completes)
+    mark_pending_plan(key_hash, plan["code"], deactivate=deactivate)
+    auth_url, reference = initialize_transaction(
+        email=email,
+        amount_naira=plan["price_naira"],
+        api_key_hash=key_hash,
+        paystack_plan_code=paystack_code,
+        metadata_plan_code=plan["code"],
+        customer={"first_name": first_name, "last_name": last_name},
+        extra_metadata={"email": email},
+    )
+    # Record this transaction as pending in the transaction history.
+    record_transaction(
+        api_key_hash=key_hash,
+        email=email,
+        plan_code=plan["code"],
+        paystack_plan_code=paystack_code,
+        amount_naira=plan["price_naira"],
+        reference=reference,
+        status="pending",
+    )
+    return auth_url, reference
 
 
 # FastAPI app configuration
@@ -388,11 +509,11 @@ def api_key_required(request: Request) -> Dict[str, Any]:
                 per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
                 per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
             else:
-                # Unknown plan code → use default paid limits
+                # Unknown plan code -> use default paid limits
                 per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
                 per_day = DEFAULT_PAID_REQUESTS_PER_DAY
         else:
-            # No plan bound → default paid limits
+            # No plan bound -> default paid limits
             per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
             per_day = DEFAULT_PAID_REQUESTS_PER_DAY
     # Enforce rate limits
@@ -407,6 +528,17 @@ def api_key_required(request: Request) -> Dict[str, Any]:
         free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
         plans=PLANS,
     )
+    return key_record
+
+
+def paid_key_required(request: Request) -> Dict[str, Any]:
+    """Enforce that the caller is using a paid key (for premium endpoints)."""
+    key_record = api_key_required(request)
+    if key_record.get("tier") != "paid":
+        raise HTTPException(
+            status_code=403,
+            detail="This endpoint is available to paid subscriptions only.",
+        )
     return key_record
 
 
@@ -572,11 +704,11 @@ def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                     per_minute = plan.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
                     per_day = plan.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
                 else:
-                    # Unknown plan → default paid limits
+                    # Unknown plan -> default paid limits
                     per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
                     per_day = DEFAULT_PAID_REQUESTS_PER_DAY
             else:
-                # Paid but no plan bound → default paid limits
+                # Paid but no plan bound -> default paid limits
                 per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
                 per_day = DEFAULT_PAID_REQUESTS_PER_DAY
 
@@ -598,13 +730,13 @@ def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                 if plan:
                     mc = plan.get("monthly_credits")
                     record["credits"] = mc
-                    # Unlimited credits → no next reset
+                    # Unlimited credits -> no next reset
                     if mc is None:
                         record["credits_reset_at"] = None
                     else:
                         record["credits_reset_at"] = now_ts + SECONDS_PER_MONTH
                 else:
-                    # Paid, no plan → unlimited credits, no reset
+                    # Paid, no plan -> unlimited credits, no reset
                     record["credits"] = None
                     record["credits_reset_at"] = None
             modified = True
@@ -625,7 +757,7 @@ def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                     "per_minute": per_minute,
                     "per_day": per_day,
                 },
-                "key_prefix": record.get("key_hash", "")[:8] + "…",
+                "key_prefix": record.get("key_hash", "")[:8] + "...",
                 # Convert created_at/upgraded_at timestamps to ISO strings
                 "created_at": to_wat_iso(record.get("created_at")),
                 "upgraded_at": to_wat_iso(record.get("upgraded_at")),
@@ -649,61 +781,142 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/rate", tags=["Core"], response_model=Dict[str, Any])
+@app.post("/rates", tags=["Core"], response_model=Dict[str, Any])
+def get_all_rates(
+    payload: BaseRatesRequest,
+    _: Dict[str, Any] = Depends(api_key_required),
+) -> Dict[str, Any]:
+    """Return all current rates for a base currency."""
+    base_lower = validate_currency(payload.base_currency)
+    rates = fetch_rates(base_lower)
+    return {
+        "base": payload.base_currency.upper(),
+        "rates": rates,
+    }
+
+
+@app.post("/rate", tags=["Core"], response_model=Dict[str, Any])
 def get_rate(
-    from_currency: str = Query(..., alias="from"),
-    to_currency: str = Query(..., alias="to"),
+    payload: RateRequest,
     _: Dict[str, Any] = Depends(api_key_required),
 ) -> Dict[str, Any]:
     """Retrieve the conversion rate from one currency to another."""
-    from_lower = validate_currency(from_currency)
-    to_lower = validate_currency(to_currency)
+    from_lower = validate_currency(payload.from_currency)
+    to_lower = validate_currency(payload.to_currency)
     rates = fetch_rates(from_lower)
     if to_lower not in rates:
         raise HTTPException(
             status_code=400,
-            detail=f"Target currency '{to_currency.upper()}' is not supported",
+            detail=f"Target currency '{payload.to_currency.upper()}' is not supported",
         )
     return {
-        "from": from_currency.upper(),
-        "to": to_currency.upper(),
+        "from": payload.from_currency.upper(),
+        "to": payload.to_currency.upper(),
         "rate": rates[to_lower],
     }
 
 
-@app.get("/convert", tags=["Core"], response_model=Dict[str, Any])
+@app.post("/convert", tags=["Core"], response_model=Dict[str, Any])
 def convert_currency(
-    from_currency: str = Query(..., alias="from"),
-    to_currency: str = Query(..., alias="to"),
-    amount: float = Query(...),
+    payload: ConvertRequest,
     _: Dict[str, Any] = Depends(api_key_required),
 ) -> Dict[str, Any]:
     """Convert an amount from one currency to another."""
-    if amount < 0:
-        raise HTTPException(status_code=400, detail="Amount must be non‑negative")
-    from_lower = validate_currency(from_currency)
-    to_lower = validate_currency(to_currency)
+    if payload.amount < 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-negative")
+    from_lower = validate_currency(payload.from_currency)
+    to_lower = validate_currency(payload.to_currency)
     rates = fetch_rates(from_lower)
     if to_lower not in rates:
         raise HTTPException(
             status_code=400,
-            detail=f"Target currency '{to_currency.upper()}' is not supported",
+            detail=f"Target currency '{payload.to_currency.upper()}' is not supported",
         )
     rate = rates[to_lower]
-    converted_amount = round(amount * rate, 4)
+    converted_amount = round(payload.amount * rate, 4)
     return {
-        "from": from_currency.upper(),
-        "to": to_currency.upper(),
-        "amount": amount,
+        "from": payload.from_currency.upper(),
+        "to": payload.to_currency.upper(),
+        "amount": payload.amount,
+        "rate": rate,
+        "converted_amount": converted_amount,
+    }
+
+
+@app.post("/rates/historical", tags=["Core"], response_model=Dict[str, Any])
+def get_historical_rates_endpoint(
+    payload: HistoricalBaseRatesRequest,
+    _: Dict[str, Any] = Depends(paid_key_required),
+) -> Dict[str, Any]:
+    """Retrieve all rates for a base currency on a specific date (paid only)."""
+    base_lower = validate_currency(payload.base_currency)
+    rates = fetch_historical_rates(base_lower, payload.date)
+    return {
+        "base": payload.base_currency.upper(),
+        "date": payload.date,
+        "rates": rates,
+    }
+
+
+@app.post("/rate/historical", tags=["Core"], response_model=Dict[str, Any])
+def get_historical_rate(
+    payload: HistoricalRateRequest,
+    _: Dict[str, Any] = Depends(paid_key_required),
+) -> Dict[str, Any]:
+    """Retrieve a historical conversion rate between two currencies (paid only)."""
+    from_lower = validate_currency(payload.from_currency)
+    to_lower = validate_currency(payload.to_currency)
+    rates = fetch_historical_rates(from_lower, payload.date)
+    if to_lower not in rates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target currency '{payload.to_currency.upper()}' is not supported",
+        )
+    return {
+        "from": payload.from_currency.upper(),
+        "to": payload.to_currency.upper(),
+        "date": payload.date,
+        "rate": rates[to_lower],
+    }
+
+
+@app.post("/convert/historical", tags=["Core"], response_model=Dict[str, Any])
+def convert_currency_historical(
+    payload: HistoricalConvertRequest,
+    _: Dict[str, Any] = Depends(paid_key_required),
+) -> Dict[str, Any]:
+    """Convert an amount between two currencies on a specific date (paid only)."""
+    if payload.amount < 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-negative")
+    from_lower = validate_currency(payload.from_currency)
+    to_lower = validate_currency(payload.to_currency)
+    rates = fetch_historical_rates(from_lower, payload.date)
+    if to_lower not in rates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target currency '{payload.to_currency.upper()}' is not supported",
+        )
+    rate = rates[to_lower]
+    converted_amount = round(payload.amount * rate, 4)
+    return {
+        "from": payload.from_currency.upper(),
+        "to": payload.to_currency.upper(),
+        "date": payload.date,
+        "amount": payload.amount,
         "rate": rate,
         "converted_amount": converted_amount,
     }
 
 
 @app.post("/auth/free-key", tags=["Auth"])
-def get_free_key() -> Dict[str, str]:
-    """Public endpoint to request a free‑tier API key."""
-    raw = generate_free_key()
+def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
+    """Public endpoint to request a free-tier API key."""
+    raw = generate_free_key(
+        owner=payload.email.strip().lower(),
+        email=payload.email,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+    )
     return {
         "tier": "free",
         "api_key": raw,
@@ -717,6 +930,52 @@ def list_plans() -> Dict[str, Any]:
     return {"plans": PLANS}
 
 
+@app.post("/billing/subscribe", tags=["Billing"], response_model=Dict[str, Any])
+def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
+    """Create a paid key and immediately start Paystack checkout (public)."""
+    plan = _get_plan_or_error(payload.plan_code)
+    email, first, last = _normalize_contact_fields(
+        payload.email, payload.first_name, payload.last_name
+    )
+    # Ensure the email is not already tied to another key
+    existing = find_key_by_email(email)
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already has an API key. Use /billing/upgrade with that key.",
+        )
+    owner = payload.owner or email
+    raw_key = generate_api_key(
+        owner=owner,
+        email=email,
+        first_name=first,
+        last_name=last,
+        active=False,
+        subscription_status="pending",
+        pending_plan_code=plan["code"],
+    )
+    record = find_key_by_email(email)
+    key_hash = record.get("key_hash") if record else None
+    if not key_hash:
+        raise HTTPException(status_code=500, detail="Failed to persist generated key")
+    auth_url, reference = _start_subscription_checkout(
+        key_hash=key_hash,
+        plan=plan,
+        email=email,
+        first_name=first,
+        last_name=last,
+        deactivate=True,
+    )
+    return {
+        "tier": "paid",
+        "api_key": raw_key,
+        "plan": plan,
+        "authorization_url": auth_url,
+        "reference": reference,
+        "message": "Complete payment to activate this key. It remains inactive until Paystack confirms.",
+    }
+
+
 @app.post("/billing/upgrade", tags=["Billing"], response_model=Dict[str, Any])
 def billing_upgrade(
     payload: UpgradePayload,
@@ -724,50 +983,61 @@ def billing_upgrade(
 ) -> Dict[str, Any]:
     """Start a Paystack transaction to upgrade a free key to a paid plan.
 
-    The caller must supply an email address and a plan_code that exists
-    in the ``PLANS`` list. The API key used for authentication will
+    The caller must supply a ``plan_code`` that exists in ``PLANS``.
+    Contact information is taken from the payload if provided, else
+    from the key record. The API key used for authentication will
     determine which key is upgraded.
     """
-    # Ensure the plan_code is valid
-    plan = next((p for p in PLANS if p["code"] == payload.plan_code), None)
-    if not plan:
-        raise HTTPException(status_code=400, detail="Unknown plan_code")
-    # Start Paystack transaction
-    # Resolve the Paystack plan code from the selected plan. This will be
-    # None if the environment variable is missing. In that case, we
-    # cannot proceed with the upgrade.
-    paystack_code = plan.get("paystack_plan_code")
-    if not paystack_code:
+    plan = _get_plan_or_error(payload.plan_code)
+    email = (payload.email or key.get("email") or "").strip().lower()
+    first = payload.first_name or key.get("first_name")
+    last = payload.last_name or key.get("last_name")
+    if not email or not first or not last:
         raise HTTPException(
             status_code=400,
-            detail=f"Paystack plan code is not configured for plan '{plan['code']}'",
+            detail="Email, first_name and last_name are required to upgrade.",
         )
-    # Initiate the Paystack transaction using the dashboard plan code. We
-    # include our internal plan code in the metadata so that the webhook
-    # can later map the Paystack plan back to the correct PLANS entry.
-    auth_url, reference = initialize_transaction(
-        email=payload.email,
-        amount_naira=plan["price_naira"],
-        api_key_hash=key["key_hash"],
-        paystack_plan_code=paystack_code,
-        metadata_plan_code=plan["code"],
-    )
-
-    # Record this transaction as pending in the transaction history.
-    record_transaction(
-        api_key_hash=key["key_hash"],
-        email=payload.email,
-        plan_code=plan["code"],
-        paystack_plan_code=paystack_code,
-        amount_naira=plan["price_naira"],
-        reference=reference,
-        status="pending",
+    # Ensure the key carries the latest contact info
+    update_key_contact(key["key_hash"], email=email, first_name=first, last_name=last)
+    auth_url, reference = _start_subscription_checkout(
+        key_hash=key["key_hash"],
+        plan=plan,
+        email=email,
+        first_name=first,
+        last_name=last,
+        deactivate=False,
     )
     return {
         "authorization_url": auth_url,
         "reference": reference,
         "plan": plan,
+        "message": "Complete the payment to activate your paid plan.",
     }
+
+
+@app.post("/billing/cancel", tags=["Billing"], response_model=Dict[str, Any])
+def cancel_subscription(
+    key: Dict[str, Any] = Depends(paid_key_required),
+) -> Dict[str, Any]:
+    """Cancel/deactivate the current subscription for the calling key."""
+    sub_code = key.get("paystack_subscription_code")
+    email_token = key.get("paystack_email_token")
+    if not sub_code or not email_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No active Paystack subscription is associated with this key.",
+        )
+    disable_subscription(sub_code, email_token)
+    upgrade_key_tier_by_hash(
+        key_hash=key["key_hash"],
+        new_tier="free",
+        plan=None,
+        free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+        subscription_status="canceled",
+        active=True,
+    )
+    update_transactions_for_key(key["key_hash"], new_status="cancelled")
+    return {"status": "cancelled", "message": "Subscription cancelled and key downgraded to free."}
 
 
 @app.post("/paystack/webhook", status_code=status.HTTP_200_OK, tags=["Billing"])
@@ -777,35 +1047,39 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
     signature = request.headers.get("x-paystack-signature")
     if not verify_paystack_signature(body, signature):
         raise HTTPException(status_code=400, detail="Invalid Paystack signature")
-    event_type, api_key_hash, plan_code = extract_webhook_info(body)
+    event_type, api_key_hash, plan_code, info = extract_webhook_info(body)
+    subscription_code = info.get("subscription_code")
+    email_token = info.get("email_token")
     # Successful payment or subscription activation
     if event_type in ("charge.success", "subscription.create", "subscription.enable"):
         if api_key_hash and plan_code:
-            # Find the plan definition
             plan = next((p for p in PLANS if p["code"] == plan_code), None)
             if plan:
-                # Update the key tier and plan
                 upgrade_key_tier_by_hash(
                     key_hash=api_key_hash,
                     new_tier="paid",
                     plan=plan,
                     free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+                    paystack_subscription_code=subscription_code,
+                    paystack_email_token=email_token,
+                    subscription_status="active",
+                    active=True,
                 )
-                # Mark the associated transactions as successful
                 update_transactions_for_key(api_key_hash, new_status="success")
-    # Subscription disabled or invoice failed → downgrade to free
     if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
         if api_key_hash:
-            # Downgrade the key to free
+            status = "cancelled" if event_type == "subscription.disable" else "failed"
             upgrade_key_tier_by_hash(
                 key_hash=api_key_hash,
                 new_tier="free",
                 plan=None,
                 free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+                subscription_status="canceled",
+                active=True,
             )
-            # Mark pending transactions for this key as failed
-            update_transactions_for_key(api_key_hash, new_status="failed")
+            update_transactions_for_key(api_key_hash, new_status=status)
     return {"status": "ok"}
+
 
 
 @app.post("/admin/generate-key", tags=["Admin"])
@@ -814,8 +1088,37 @@ def admin_generate_key(
     _: bool = Depends(admin_required),
 ) -> Dict[str, str]:
     """Admin endpoint to generate a new paid API key."""
-    raw = generate_api_key(payload.owner)
-    return {"owner": payload.owner, "api_key": raw}
+    plan = _get_plan_or_error(payload.plan_code) if payload.plan_code else None
+    email, first, last = _normalize_contact_fields(
+        payload.email, payload.first_name, payload.last_name
+    )
+    raw = generate_api_key(
+        payload.owner,
+        email=email,
+        first_name=first,
+        last_name=last,
+        plan_code=plan["code"] if plan else None,
+        active=payload.activate,
+        subscription_status="active" if payload.activate else "pending",
+    )
+    record = find_key_by_email(email)
+    key_hash = record.get("key_hash") if record else None
+    if plan and key_hash:
+        upgrade_key_tier_by_hash(
+            key_hash=key_hash,
+            new_tier="paid",
+            plan=plan,
+            free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+            subscription_status="active" if payload.activate else "pending",
+            active=payload.activate,
+        )
+    return {
+        "owner": payload.owner,
+        "api_key": raw,
+        "plan_code": plan["code"] if plan else None,
+        "contact": {"email": email, "first_name": first, "last_name": last},
+        "active": payload.activate,
+    }
 
 
 @app.post("/admin/revoke-key", tags=["Admin"])
@@ -1001,18 +1304,46 @@ def create_key(
         HTTPException: If the tier is invalid.
     """
     tier_lower = payload.tier.strip().lower()
+    email = payload.email.strip().lower()
     if tier_lower not in {"free", "paid"}:
         raise HTTPException(status_code=400, detail="Invalid key tier specified")
     if tier_lower == "free":
-        raw_key = generate_free_key(owner=user["id"])
-        return {"tier": "free", "api_key": raw_key}
+        raw_key = generate_free_key(
+            owner=user["id"],
+            email=email,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+        )
+        return {
+            "tier": "free",
+            "api_key": raw_key,
+            "contact": {
+                "email": email,
+                "first_name": payload.first_name,
+                "last_name": payload.last_name,
+            },
+        }
     else:
         # For paid keys, set owner to the user's id. The key will
         # default to unlimited credits until the user upgrades via
         # subscription. Users can later apply a plan using the
         # `/billing/upgrade` endpoint with their key.
-        raw_key = generate_api_key(owner=user["id"])
-        return {"tier": "paid", "api_key": raw_key}
+        raw_key = generate_api_key(
+            owner=user["id"],
+            email=email,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+        )
+        return {
+            "tier": "paid",
+            "api_key": raw_key,
+            "contact": {
+                "email": email,
+                "first_name": payload.first_name,
+                "last_name": payload.last_name,
+            },
+            "note": "Attach a subscription using /billing/upgrade or /billing/subscribe to enable paid limits.",
+        }
 
 
 @app.get("/user/keys", tags=["User"])
@@ -1034,9 +1365,14 @@ def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str
                     "tier": record.get("tier"),
                     "active": record.get("active", True),
                     "plan_code": record.get("plan_code"),
+                    "pending_plan_code": record.get("pending_plan_code"),
+                    "subscription_status": record.get("subscription_status"),
+                    "email": record.get("email"),
+                    "first_name": record.get("first_name"),
+                    "last_name": record.get("last_name"),
                     "created_at": to_wat_iso(record.get("created_at")),
                     "upgraded_at": to_wat_iso(record.get("upgraded_at")),
-                    "key_prefix": record.get("key_hash", "")[:8] + "…",
+                    "key_prefix": record.get("key_hash", "")[:8] + ".",
                 }
             )
     return {"keys": owned}
@@ -1082,9 +1418,16 @@ def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                 "active": key.get("active", True),
                 "tier": key.get("tier", "paid"),
                 "plan_code": key.get("plan_code"),
+                "pending_plan_code": key.get("pending_plan_code"),
+                "subscription_status": key.get("subscription_status"),
+                "email": key.get("email"),
+                "first_name": key.get("first_name"),
+                "last_name": key.get("last_name"),
+                "paystack_subscription_code": key.get("paystack_subscription_code"),
                 # Convert numeric timestamps to ISO strings for display
                 "created_at": to_wat_iso(key.get("created_at")),
-                "key_prefix": key.get("key_hash", "")[:8] + "…",
+                "upgraded_at": to_wat_iso(key.get("upgraded_at")),
+                "key_prefix": key.get("key_hash", "")[:8] + ".",
             }
         )
     return {"keys": keys_out}
@@ -1117,7 +1460,7 @@ async def swagger_docs(_: Dict[str, Any] = Depends(api_key_required)) -> HTMLRes
 # Public documentation endpoints
 # ---------------------------------------------------------------------------
 
-# We expose a read‑only OpenAPI schema and docs without requiring an API key.
+# We expose a read-only OpenAPI schema and docs without requiring an API key.
 # These endpoints are useful for developers exploring the API before obtaining
 # a key. They are intentionally excluded from the generated schema via
 # ``include_in_schema=False`` to avoid cluttering the spec with duplicate

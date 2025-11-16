@@ -14,7 +14,7 @@ import json
 import os
 import hmac
 import hashlib
-from typing import Tuple, Optional, Any, Dict
+from typing import Tuple, Optional, Any, Dict, Mapping
 
 import requests
 from fastapi import HTTPException
@@ -47,6 +47,8 @@ def initialize_transaction(
     api_key_hash: str,
     paystack_plan_code: str,
     metadata_plan_code: Optional[str] = None,
+    customer: Optional[Dict[str, str]] = None,
+    extra_metadata: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, str]:
     """Initiate a Paystack transaction for subscription upgrade.
 
@@ -68,6 +70,10 @@ def initialize_transaction(
             ``PRO_MONTHLY``). If provided, this code is stored in the
             transaction metadata under the ``plan_code`` key. If omitted,
             the Paystack plan code is also used as the metadata plan code.
+        customer: Optional mapping of customer details (e.g. first_name,
+            last_name) to include in the metadata for traceability.
+        extra_metadata: Optional metadata to merge into the request sent to
+            Paystack.
 
     Returns:
         A tuple ``(authorization_url, reference)`` where
@@ -81,15 +87,21 @@ def initialize_transaction(
     # to the Paystack plan code. This allows us to map Paystack plans back
     # to our internal plans in the webhook handler.
     meta_code = metadata_plan_code or paystack_plan_code
+    metadata: Dict[str, Any] = {
+        "api_key_hash": api_key_hash,
+        "plan_code": meta_code,
+    }
+    if customer:
+        metadata.update({k: v for k, v in customer.items() if v})
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
     payload = {
         "email": email,
         "amount": amount_naira * 100,  # convert Naira to kobo
         # Paystack expects the dashboard plan code here
         "plan": paystack_plan_code,
-        "metadata": {
-            "api_key_hash": api_key_hash,
-            "plan_code": meta_code,
-        },
+        "metadata": metadata,
     }
     url = f"{PAYSTACK_BASE_URL}/transaction/initialize"
     resp = requests.post(url, headers=_get_headers(), json=payload, timeout=10)
@@ -107,8 +119,25 @@ def initialize_transaction(
     return data["data"]["authorization_url"], data["data"]["reference"]
 
 
+def disable_subscription(subscription_code: str, email_token: str) -> None:
+    """Disable an active Paystack subscription."""
+    payload = {"code": subscription_code, "token": email_token}
+    url = f"{PAYSTACK_BASE_URL}/subscription/disable"
+    resp = requests.post(url, headers=_get_headers(), json=payload, timeout=10)
+    try:
+        data = resp.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid response from Paystack")
+    if not resp.ok or not data.get("status"):
+        detail = data.get("message", "Unknown error")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to disable subscription: {detail}",
+        )
+
+
 def verify_paystack_signature(body: bytes, signature: Optional[str]) -> bool:
-    """Verify Paystack webhook signature using SHA‑512.
+    """Verify Paystack webhook signature using SHA-512.
 
     Args:
         body: Raw request body from webhook.
@@ -126,16 +155,17 @@ def verify_paystack_signature(body: bytes, signature: Optional[str]) -> bool:
     return hmac.compare_digest(computed, signature)
 
 
-def extract_webhook_info(body: bytes) -> Tuple[str, Optional[str], Optional[str]]:
+def extract_webhook_info(body: bytes) -> Tuple[str, Optional[str], Optional[str], Dict[str, Any]]:
     """Extract key information from a Paystack webhook payload.
 
     Args:
         body: Raw request body from the webhook.
 
     Returns:
-        A tuple ``(event_type, api_key_hash, plan_code)``. The
+        A tuple ``(event_type, api_key_hash, plan_code, info)``. The
         ``api_key_hash`` and ``plan_code`` values are extracted from
-        ``metadata`` if present.
+        ``metadata`` when available. The ``info`` dict contains
+        subscription identifiers and customer details when present.
 
     Raises:
         HTTPException: If the body cannot be parsed.
@@ -148,5 +178,23 @@ def extract_webhook_info(body: bytes) -> Tuple[str, Optional[str], Optional[str]
     event_data = data.get("data", {}) or {}
     metadata = event_data.get("metadata", {}) or {}
     api_key_hash = metadata.get("api_key_hash")
-    plan_code = metadata.get("plan_code") or metadata.get("plan")
-    return event_type, api_key_hash, plan_code
+    plan_code = metadata.get("plan_code") or metadata.get("plan") or event_data.get("plan")
+
+    subscription = event_data.get("subscription", {}) or {}
+    subscription_code = (
+        event_data.get("subscription_code")
+        or subscription.get("subscription_code")
+        or subscription.get("code")
+    )
+    email_token = event_data.get("email_token") or subscription.get("email_token")
+    customer = event_data.get("customer", {}) or {}
+
+    info = {
+        "subscription_code": subscription_code,
+        "email_token": email_token,
+        "customer_email": customer.get("email") or metadata.get("email"),
+        "customer_first_name": customer.get("first_name") or metadata.get("first_name"),
+        "customer_last_name": customer.get("last_name") or metadata.get("last_name"),
+        "reference": event_data.get("reference") or metadata.get("reference"),
+    }
+    return event_type, api_key_hash, plan_code, info

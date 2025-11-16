@@ -95,9 +95,14 @@ def test_register_verify_login_and_key_flow():
     assert me_data["user"]["email"] == email.lower()
 
     # Step 5: Create a free key
+    free_contact = {
+        "email": f"free_{email}",
+        "first_name": "Test",
+        "last_name": "User",
+    }
     free_key_resp = client.post(
         "/auth/create-key",
-        json={"tier": "free"},
+        json={"tier": "free", **free_contact},
         headers={"X-SESSION-TOKEN": session_token},
     )
     assert free_key_resp.status_code == 200
@@ -107,9 +112,14 @@ def test_register_verify_login_and_key_flow():
     assert free_key.startswith("free_")
 
     # Step 6: Create a paid key
+    paid_contact = {
+        "email": f"paid_{email}",
+        "first_name": "Paid",
+        "last_name": "User",
+    }
     paid_key_resp = client.post(
         "/auth/create-key",
-        json={"tier": "paid"},
+        json={"tier": "paid", **paid_contact},
         headers={"X-SESSION-TOKEN": session_token},
     )
     assert paid_key_resp.status_code == 200
@@ -129,8 +139,10 @@ def test_register_verify_login_and_key_flow():
     assert "free" in tiers and "paid" in tiers
 
     # Step 8: Use the free key to call a protected endpoint
-    rate_resp = client.get(
-        "/rate?from=USD&to=NGN", headers={"X-API-KEY": free_key}
+    rate_resp = client.post(
+        "/rate",
+        json={"from_currency": "USD", "to_currency": "NGN"},
+        headers={"X-API-KEY": free_key},
     )
     assert rate_resp.status_code == 200
     rate_data = rate_resp.json()

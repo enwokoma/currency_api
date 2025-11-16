@@ -18,7 +18,9 @@ format::
                 "plan_code": "PRO_MONTHLY",
                 "paystack_plan_code": "PLN_xxx",
                 "amount_naira": 5000,
-                "status": "pending" | "success" | "failed",
+                "status": "pending" | "success" | "failed" | "cancelled",
+                "subscription_code": "SUB_xxx" | null,
+                "email_token": "ETK_xxx" | null,
                 "created_at": 1700000000.0,
                 "updated_at": 1700000000.0
             },
@@ -79,6 +81,8 @@ def record_transaction(
     amount_naira: int,
     reference: str,
     status: str = "pending",
+    subscription_code: Optional[str] = None,
+    email_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Add a new transaction record to the store.
 
@@ -90,6 +94,8 @@ def record_transaction(
         amount_naira: The amount in Naira charged for the plan.
         reference: The Paystack transaction reference.
         status: Initial status for the transaction (defaults to ``pending``).
+        subscription_code: Optional Paystack subscription code for the transaction.
+        email_token: Optional Paystack email token for the transaction.
 
     Returns:
         The created transaction record.
@@ -103,6 +109,8 @@ def record_transaction(
         "paystack_plan_code": paystack_plan_code,
         "amount_naira": amount_naira,
         "status": status,
+        "subscription_code": subscription_code,
+        "email_token": email_token,
         "created_at": time.time(),
         "updated_at": time.time(),
     }

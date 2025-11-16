@@ -9,6 +9,7 @@ codes are normalized to lowercase for consistency.
 from __future__ import annotations
 
 import requests
+from datetime import datetime, date
 from typing import Dict
 from fastapi import HTTPException
 
@@ -18,7 +19,14 @@ PRIMARY_BASE_URL = (
     "https://cdn.jsdelivr.net/npm/"
     "@fawazahmed0/currency-api@latest/v1/currencies"
 )
+PRIMARY_HISTORICAL_BASE_URL = (
+    "https://cdn.jsdelivr.net/npm/"
+    "@fawazahmed0/currency-api@{date}/v1/currencies"
+)
 FALLBACK_URL_TEMPLATE = "https://api.exchangerate.host/latest?base={base}"
+FALLBACK_HISTORICAL_TEMPLATE = (
+    "https://api.exchangerate.host/{date}?base={base}"
+)
 
 # Static fallback rates used when external providers are unavailable. This
 # ensures the service can still function (albeit with approximate rates)
@@ -107,4 +115,68 @@ def fetch_rates(base: str) -> Dict[str, float]:
     if base_lower in STATIC_FALLBACK_RATES:
         return STATIC_FALLBACK_RATES[base_lower]
     # Provide a trivial self-rate as a last resort
+    return {base_lower: 1.0}
+
+
+def _validate_date(date_str: str) -> str:
+    """Validate a YYYY-MM-DD date string and ensure it is not in the future."""
+    try:
+        parsed = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Date must be in format YYYY-MM-DD",
+        )
+    if parsed > date.today():
+        raise HTTPException(
+            status_code=400,
+            detail="Date cannot be in the future",
+        )
+    return parsed.isoformat()
+
+
+def fetch_historical_rates(base: str, date_str: str) -> Dict[str, float]:
+    """Fetch historical conversion rates for a given date and base currency.
+
+    Args:
+        base: The base currency code (lowercase).
+        date_str: Date in ``YYYY-MM-DD`` format (must not be in the future).
+
+    Returns:
+        A mapping of target currency codes to their exchange rates on the date.
+
+    Raises:
+        HTTPException: If providers fail and no cached/static rates are available.
+    """
+    base = validate_currency(base)
+    safe_date = _validate_date(date_str)
+
+    # Try primary historical provider
+    try:
+        url = f"{PRIMARY_HISTORICAL_BASE_URL.format(date=safe_date)}/{base}.json"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            raw_rates = data.get(base)
+            if raw_rates:
+                return {k.lower(): float(v) for k, v in raw_rates.items()}
+    except Exception:
+        pass
+
+    # Fallback provider
+    try:
+        url = FALLBACK_HISTORICAL_TEMPLATE.format(base=base.upper(), date=safe_date)
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            raw_rates = data.get("rates")
+            if raw_rates:
+                return {k.lower(): float(v) for k, v in raw_rates.items()}
+    except Exception:
+        pass
+
+    # Final static fallback mirrors the latest static rates when available.
+    base_lower = base.lower()
+    if base_lower in STATIC_FALLBACK_RATES:
+        return STATIC_FALLBACK_RATES[base_lower]
     return {base_lower: 1.0}

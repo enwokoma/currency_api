@@ -4,6 +4,7 @@ uvicorn
 
 # HTTP requests and API integrations
 requests
+httpx
 
 # Data models and validation
 pydantic
