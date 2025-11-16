@@ -1,6 +1,18 @@
+# Web framework
 fastapi
 uvicorn
+
+# HTTP requests and API integrations
 requests
-cachetools
-orjson
+
+# Data models and validation
 pydantic
+
+# Caching and utilities (used in utils/rate limiting)
+cachetools
+
+# High-performance JSON parsing (optional; falls back gracefully)
+orjson
+
+# Environment variable management (optional, used in main.py)
+python-dotenv
