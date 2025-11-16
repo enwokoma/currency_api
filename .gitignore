@@ -1,4 +1,5 @@
 .env
+.idea
 /admin_token.txt
 /keys.json
 /sessions.json
