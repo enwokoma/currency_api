@@ -1,0 +1,312 @@
+{
+  "info": {
+    "name": "Currency Conversion API",
+    "_postman_id": "2b7f5a1e-3f5c-4f05-9a3b-d7c1e3f9c001",
+    "description": "End-to-end collection for the Currency Conversion API. Set variables before running requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "admin_token", "value": "" },
+    { "key": "session_token", "value": "" },
+    { "key": "free_api_key", "value": "" },
+    { "key": "paid_api_key", "value": "" },
+    { "key": "plan_code", "value": "BASIC_MONTHLY" },
+    { "key": "contact_email", "value": "contact@example.com" },
+    { "key": "contact_first_name", "value": "First" },
+    { "key": "contact_last_name", "value": "Last" },
+    { "key": "user_email", "value": "user@example.com" },
+    { "key": "user_password", "value": "StrongPass123" },
+    { "key": "verification_otp", "value": "" },
+    { "key": "verification_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "Auth & Sessions",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Demo\",\n  \"last_name\": \"User\",\n  \"email\": \"{{user_email}}\",\n  \"password\": \"{{user_password}}\",\n  \"confirm_password\": \"{{user_password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] }
+          }
+        },
+        {
+          "name": "Verify Email (OTP or token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{user_email}}\",\n  \"otp\": \"{{verification_otp}}\",\n  \"token\": \"{{verification_token}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/verify-email", "host": ["{{base_url}}"], "path": ["auth", "verify-email"] }
+          }
+        },
+        {
+          "name": "Resend Verification",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"email\": \"{{user_email}}\" }" },
+            "url": { "raw": "{{base_url}}/auth/resend-verification", "host": ["{{base_url}}"], "path": ["auth", "resend-verification"] }
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"email\": \"{{user_email}}\", \"password\": \"{{user_password}}\" }" },
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Current User",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
+            "url": { "raw": "{{base_url}}/user", "host": ["{{base_url}}"], "path": ["user"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
+            "url": { "raw": "{{base_url}}/auth/logout", "host": ["{{base_url}}"], "path": ["auth", "logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Keys",
+      "item": [
+        {
+          "name": "Public Free Key",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{contact_email}}\",\n  \"first_name\": \"{{contact_first_name}}\",\n  \"last_name\": \"{{contact_last_name}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/free-key", "host": ["{{base_url}}"], "path": ["auth", "free-key"] }
+          }
+        },
+        {
+          "name": "Create Key (session)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tier\": \"free\",\n  \"email\": \"{{contact_email}}\",\n  \"first_name\": \"{{contact_first_name}}\",\n  \"last_name\": \"{{contact_last_name}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/create-key", "host": ["{{base_url}}"], "path": ["auth", "create-key"] }
+          }
+        },
+        {
+          "name": "List User Keys",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
+            "url": { "raw": "{{base_url}}/user/keys", "host": ["{{base_url}}"], "path": ["user", "keys"] }
+          }
+        },
+        {
+          "name": "Admin Generate Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"owner\": \"ops\",\n  \"email\": \"adminkey@example.com\",\n  \"first_name\": \"Ops\",\n  \"last_name\": \"Team\",\n  \"plan_code\": null,\n  \"activate\": true\n}"
+            },
+            "url": { "raw": "{{base_url}}/admin/generate-key", "host": ["{{base_url}}"], "path": ["admin", "generate-key"] }
+          }
+        },
+        {
+          "name": "Admin Revoke Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"api_key\": \"{{free_api_key}}\" }" },
+            "url": { "raw": "{{base_url}}/admin/revoke-key", "host": ["{{base_url}}"], "path": ["admin", "revoke-key"] }
+          }
+        },
+        {
+          "name": "Admin List Keys",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }],
+            "url": { "raw": "{{base_url}}/admin/keys", "host": ["{{base_url}}"], "path": ["admin", "keys"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing",
+      "item": [
+        {
+          "name": "Plans",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/plans", "host": ["{{base_url}}"], "path": ["plans"] }
+          }
+        },
+        {
+          "name": "Subscribe (new paid key)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan_code\": \"{{plan_code}}\",\n  \"email\": \"{{contact_email}}\",\n  \"first_name\": \"{{contact_first_name}}\",\n  \"last_name\": \"{{contact_last_name}}\",\n  \"owner\": \"public-user\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/billing/subscribe", "host": ["{{base_url}}"], "path": ["billing", "subscribe"] }
+          }
+        },
+        {
+          "name": "Upgrade Existing Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan_code\": \"{{plan_code}}\",\n  \"email\": \"{{contact_email}}\",\n  \"first_name\": \"{{contact_first_name}}\",\n  \"last_name\": \"{{contact_last_name}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/billing/upgrade", "host": ["{{base_url}}"], "path": ["billing", "upgrade"] }
+          }
+        },
+        {
+          "name": "Cancel Subscription",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-API-KEY", "value": "{{paid_api_key}}" }],
+            "url": { "raw": "{{base_url}}/billing/cancel", "host": ["{{base_url}}"], "path": ["billing", "cancel"] }
+          }
+        },
+        {
+          "name": "My Transactions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-KEY", "value": "{{paid_api_key}}" }],
+            "url": { "raw": "{{base_url}}/transactions", "host": ["{{base_url}}"], "path": ["transactions"] }
+          }
+        },
+        {
+          "name": "Admin Transactions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }],
+            "url": { "raw": "{{base_url}}/admin/transactions", "host": ["{{base_url}}"], "path": ["admin", "transactions"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Core Currency",
+      "item": [
+        {
+          "name": "Rate",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"USD\", \"to_currency\": \"NGN\" }" },
+            "url": { "raw": "{{base_url}}/rate", "host": ["{{base_url}}"], "path": ["rate"] }
+          }
+        },
+        {
+          "name": "Convert",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"EUR\", \"to_currency\": \"USD\", \"amount\": 50 }" },
+            "url": { "raw": "{{base_url}}/convert", "host": ["{{base_url}}"], "path": ["convert"] }
+          }
+        },
+        {
+          "name": "All Rates (base)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"base_currency\": \"USD\" }" },
+            "url": { "raw": "{{base_url}}/rates", "host": ["{{base_url}}"], "path": ["rates"] }
+          }
+        },
+        {
+          "name": "Historical Rate (paid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{paid_api_key}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"USD\", \"to_currency\": \"EUR\", \"date\": \"2024-12-31\" }" },
+            "url": { "raw": "{{base_url}}/rate/historical", "host": ["{{base_url}}"], "path": ["rate", "historical"] }
+          }
+        },
+        {
+          "name": "Historical Convert (paid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{paid_api_key}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"GBP\", \"to_currency\": \"USD\", \"date\": \"2024-12-15\", \"amount\": 250 }" },
+            "url": { "raw": "{{base_url}}/convert/historical", "host": ["{{base_url}}"], "path": ["convert", "historical"] }
+          }
+        },
+        {
+          "name": "Historical Rates (base, paid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-KEY", "value": "{{paid_api_key}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"base_currency\": \"USD\", \"date\": \"2024-12-31\" }" },
+            "url": { "raw": "{{base_url}}/rates/historical", "host": ["{{base_url}}"], "path": ["rates", "historical"] }
+          }
+        }
+      ]
+    }
+  ]
+}
