@@ -1,4 +1,6 @@
 .env
-/keys.json
-/transactions.json
 /admin_token.txt
+/keys.json
+/sessions.json
+/transactions.json
+/users.json
