@@ -10,6 +10,7 @@
     { "key": "admin_token", "value": "" },
     { "key": "session_token", "value": "" },
     { "key": "free_api_key", "value": "" },
+    { "key": "free_api_key_prefix", "value": "" },
     { "key": "paid_api_key", "value": "" },
     { "key": "plan_code", "value": "BASIC_MONTHLY" },
     { "key": "user_first_name", "value": "Demo" },
@@ -294,7 +295,8 @@
             "method": "POST",
             "header": [
               { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
+              { "key": "X-API-KEY", "value": "{{free_api_key}}" },
+              { "key": "X-API-KEY-PREFIX", "value": "{{free_api_key_prefix}}" }
             ],
             "body": {
               "mode": "raw",

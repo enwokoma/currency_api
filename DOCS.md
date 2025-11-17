@@ -400,12 +400,12 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 > The generated key stays inactive and subscription_status=`pending` until Paystack confirms.
 
 ### Upgrade existing key - `POST /billing/upgrade`
-- Header: `X-API-KEY: {{free_api_key}}`
+- Header: `X-API-KEY: {{free_api_key}}` (or `X-API-KEY-PREFIX: {{free_api_key_prefix}}` if the raw key is stored safely)
 ```json
-{ 
-  "plan_code": "PRO_MONTHLY", 
-  "email": "owner@example.com", 
-  "first_name": "Owner", 
+{
+  "plan_code": "PRO_MONTHLY",
+  "email": "owner@example.com",
+  "first_name": "Owner",
   "last_name": "Example"
 }
 ```

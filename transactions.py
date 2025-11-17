@@ -175,3 +175,16 @@ def get_pending_transaction_for_key(api_key_hash: str) -> Optional[Dict[str, Any
     # Return the most recent pending transaction
     txns.sort(key=lambda t: t.get("created_at", 0), reverse=True)
     return txns[0]
+
+
+def get_latest_transaction_for_key(api_key_hash: str) -> Optional[Dict[str, Any]]:
+    """Return the most recent transaction (any status) for a key."""
+    txns = [
+        t
+        for t in load_transactions().get("transactions", [])
+        if t.get("api_key_hash") == api_key_hash
+    ]
+    if not txns:
+        return None
+    txns.sort(key=lambda t: t.get("created_at", 0), reverse=True)
+    return txns[0]

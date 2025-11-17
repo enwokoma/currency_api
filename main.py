@@ -99,6 +99,7 @@ from transactions import (
     load_transactions,
     get_transactions_for_key,
     get_pending_transaction_for_key,
+    get_latest_transaction_for_key,
 )
 from usage_stats import record_usage_event, get_usage_map
 
@@ -505,6 +506,19 @@ def _get_user_key_by_prefix(user_id: str, key_prefix: str) -> Dict[str, Any]:
     raise HTTPException(status_code=404, detail="API key not found for this user")
 
 
+def _get_key_by_prefix(prefix: str) -> Dict[str, Any]:
+    """Find a key globally via key hash prefix (requires uniqueness)."""
+    data = load_keys()
+    matches = [r for r in data.get("keys", []) if (r.get("key_hash") or "").startswith(prefix)]
+    if not matches:
+        raise HTTPException(status_code=401, detail="Invalid API key prefix")
+    if len(matches) > 1:
+        raise HTTPException(status_code=400, detail="API key prefix is not unique; provide full key")
+    rec = dict(matches[0])
+    rec["key_hash"] = matches[0].get("key_hash")
+    return rec
+
+
 def _revoke_key_record(record: Dict[str, Any]) -> None:
     data = load_keys()
     for rec in data.get("keys", []):
@@ -708,7 +722,21 @@ def paid_key_required(request: Request) -> Dict[str, Any]:
 def billing_key_required(request: Request) -> Dict[str, Any]:
     """Allow pending/inactive keys to initiate billing flows."""
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
-    key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
+    prefix = request.headers.get("X-API-KEY-PREFIX") or request.query_params.get("api_key_prefix")
+    if raw_key:
+        key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
+    elif prefix:
+        key_record = _get_key_by_prefix(prefix)
+        # Apply basic validation similar to validate_api_key for billing flows
+        if not key_record.get("active", True) and key_record.get("subscription_status") not in {"pending", None}:
+            raise HTTPException(
+                status_code=403,
+                detail="This key is inactive. Contact support or generate a new key.",
+            )
+        key_record.setdefault("tier", "paid")
+        key_record.setdefault("subscription_status", "active" if key_record.get("tier") == "paid" else "free")
+    else:
+        raise HTTPException(status_code=401, detail="Missing API Key")
     # Hard-block revoked or inactive keys that are not merely pending activation
     if (
         not key_record.get("active", True)
@@ -1146,18 +1174,36 @@ def billing_upgrade(
     # Block duplicate/pending upgrades
     if key.get("pending_plan_code"):
         pending_txn = get_pending_transaction_for_key(key["key_hash"])
-        if pending_txn:
+        if pending_txn and pending_txn.get("authorization_url"):
             return {
                 "authorization_url": pending_txn.get("authorization_url"),
                 "reference": pending_txn.get("reference"),
                 "plan": plan,
                 "message": "Continue the existing pending payment to activate your plan.",
             }
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="An upgrade is already pending for this key. Complete payment or wait.",
-            )
+        last_txn = get_latest_transaction_for_key(key["key_hash"])
+        if last_txn and last_txn.get("authorization_url"):
+            return {
+                "authorization_url": last_txn.get("authorization_url"),
+                "reference": last_txn.get("reference"),
+                "plan": plan,
+                "message": "Continue the existing pending payment to activate your plan.",
+            }
+        # No transaction found; re-start checkout using the pending plan
+        auth_url, reference = _start_subscription_checkout(
+            key_hash=key["key_hash"],
+            plan=plan,
+            email=email,
+            first_name=first,
+            last_name=last,
+            deactivate=False,
+        )
+        return {
+            "authorization_url": auth_url,
+            "reference": reference,
+            "plan": plan,
+            "message": "Continue the existing pending payment to activate your plan.",
+        }
     # Block re-purchasing the same active plan unless credits are exhausted
     if key.get("plan_code") == plan["code"] and key.get("subscription_status") == "active":
         credits = key.get("credits")
