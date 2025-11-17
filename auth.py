@@ -146,15 +146,22 @@ def assert_unique_key_email(email: str, skip_key_hash: Optional[str] = None) -> 
             )
 
 
-def find_key_by_email(email: str, *, include_inactive: bool = True) -> Optional[Dict[str, Any]]:
+def find_key_by_email(
+    email: str, *, include_inactive: bool = True, include_revoked: bool = True
+) -> Optional[Dict[str, Any]]:
     """Return the first key record matching the provided email (if any)."""
     email_norm = normalize_email(email)
     data = load_keys()
     for record in data.get("keys", []):
-        if record.get("email") == email_norm and (include_inactive or record.get("active", True)):
-            copy = dict(record)
-            copy["key_hash"] = record.get("key_hash")
-            return copy
+        if record.get("email") != email_norm:
+            continue
+        if not include_inactive and not record.get("active", True):
+            continue
+        if not include_revoked and record.get("revoked_at"):
+            continue
+        copy = dict(record)
+        copy["key_hash"] = record.get("key_hash")
+        return copy
     return None
 
 
@@ -420,6 +427,7 @@ def upgrade_key_tier_by_hash(
     paystack_email_token: str | None = None,
     subscription_status: str | None = None,
     active: bool | None = None,
+    allow_revoked: bool = False,
 ) -> dict:
     """Upgrade or downgrade a key based on subscription events.
 
@@ -448,6 +456,8 @@ def upgrade_key_tier_by_hash(
     for record in data.get('keys', []):
         if record.get('key_hash') != key_hash:
             continue
+        if record.get("revoked_at") and not allow_revoked:
+            raise HTTPException(status_code=403, detail="Key is revoked and cannot be upgraded")
         if new_tier == 'paid':
             record['tier'] = 'paid'
             if plan is not None:

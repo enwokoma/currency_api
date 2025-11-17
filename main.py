@@ -1084,7 +1084,7 @@ def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
         payload.email, payload.first_name, payload.last_name
     )
     # Ensure the email is not already tied to another key
-    existing = find_key_by_email(email, include_inactive=False)
+    existing = find_key_by_email(email, include_inactive=True, include_revoked=True)
     if existing:
         raise HTTPException(
             status_code=400,
@@ -1225,17 +1225,21 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
         if api_key_hash and plan_code:
             plan = next((p for p in PLANS if p["code"] == plan_code), None)
             if plan:
-                upgrade_key_tier_by_hash(
-                    key_hash=api_key_hash,
-                    new_tier="paid",
-                    plan=plan,
-                    free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
-                    paystack_subscription_code=subscription_code,
-                    paystack_email_token=email_token,
-                    subscription_status="active",
-                    active=True,
-                )
-                update_transactions_for_key(api_key_hash, new_status="success")
+                record = next((k for k in load_keys().get("keys", []) if k.get("key_hash") == api_key_hash), None)
+                if record and record.get("revoked_at"):
+                    update_transactions_for_key(api_key_hash, new_status="failed")
+                else:
+                    upgrade_key_tier_by_hash(
+                        key_hash=api_key_hash,
+                        new_tier="paid",
+                        plan=plan,
+                        free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+                        paystack_subscription_code=subscription_code,
+                        paystack_email_token=email_token,
+                        subscription_status="active",
+                        active=True,
+                    )
+                    update_transactions_for_key(api_key_hash, new_status="success")
     if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
         if api_key_hash:
             status = "cancelled" if event_type == "subscription.disable" else "failed"
@@ -1630,6 +1634,7 @@ def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str
                 {
                     "tier": record.get("tier"),
                     "active": record.get("active", True),
+                    "revoked": bool(record.get("revoked_at")),
                     "plan_code": record.get("plan_code"),
                     "pending_plan_code": record.get("pending_plan_code"),
                     "subscription_status": record.get("subscription_status"),
@@ -1707,6 +1712,7 @@ def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
             {
                 "owner": key.get("owner"),
                 "active": key.get("active", True),
+                "revoked": bool(key.get("revoked_at")),
                 "tier": key.get("tier", "paid"),
                 "plan_code": key.get("plan_code"),
                 "pending_plan_code": key.get("pending_plan_code"),
