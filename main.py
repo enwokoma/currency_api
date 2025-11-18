@@ -103,6 +103,7 @@ from transactions import (
     get_latest_transaction_for_key,
     find_transaction_by_reference,
     update_transaction_by_reference,
+    has_valid_authorization_url,
 )
 from usage_stats import record_usage_event, get_usage_map
 
@@ -1183,7 +1184,7 @@ def billing_upgrade(
     # Block duplicate/pending upgrades
     if key.get("pending_plan_code"):
         pending_txn = get_pending_transaction_for_key(key["key_hash"])
-        if pending_txn and pending_txn.get("authorization_url"):
+        if has_valid_authorization_url(pending_txn):
             return {
                 "authorization_url": pending_txn.get("authorization_url"),
                 "reference": pending_txn.get("reference"),
@@ -1191,7 +1192,7 @@ def billing_upgrade(
                 "message": "Continue the existing pending payment to activate your plan.",
             }
         last_txn = get_latest_transaction_for_key(key["key_hash"])
-        if last_txn and last_txn.get("authorization_url"):
+        if has_valid_authorization_url(last_txn):
             return {
                 "authorization_url": last_txn.get("authorization_url"),
                 "reference": last_txn.get("reference"),
@@ -1211,7 +1212,7 @@ def billing_upgrade(
             "authorization_url": auth_url,
             "reference": reference,
             "plan": plan,
-            "message": "Continue the existing pending payment to activate your plan.",
+            "message": "Existing checkout link expired or is missing. A new link was created to continue activation.",
         }
     # Block re-purchasing the same active plan unless credits are exhausted
     if key.get("plan_code") == plan["code"] and key.get("subscription_status") == "active":
@@ -1338,6 +1339,24 @@ def reconcile_transaction(
             status_code=400,
             detail="Paystack metadata missing api_key_hash or plan_code; cannot reconcile automatically.",
         )
+    existing_txn = find_transaction_by_reference(ref)
+    if existing_txn and existing_txn.get("status") == "success":
+        record = next((k for k in load_keys().get("keys", []) if k.get("key_hash") == api_key_hash), None)
+        updated_txn = update_transaction_by_reference(
+            ref,
+            subscription_code=existing_txn.get("subscription_code") or txn_data.get("subscription_code"),
+            email_token=existing_txn.get("email_token") or txn_data.get("email_token"),
+        ) or existing_txn
+        return {
+            "status": "reconciled",
+            "message": "Transaction already reconciled; no changes applied to credits or plan.",
+            "key_hash": api_key_hash,
+            "plan_code": plan_code,
+            "subscription_code": updated_txn.get("subscription_code"),
+            "email_token": updated_txn.get("email_token"),
+            "key": record,
+            "transaction": updated_txn,
+        }
     plan = next((p for p in PLANS if p["code"] == plan_code), None)
     if not plan:
         raise HTTPException(status_code=400, detail="Plan from Paystack metadata is not recognised")
