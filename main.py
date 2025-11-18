@@ -1306,7 +1306,7 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
 def admin_generate_key(
     payload: OwnerPayload,
     _: bool = Depends(admin_required),
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Admin endpoint to generate a new paid API key."""
     plan = _get_plan_or_error(payload.plan_code) if payload.plan_code else None
     email, first, last = _normalize_contact_fields(
