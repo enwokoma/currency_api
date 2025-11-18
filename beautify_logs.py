@@ -25,4 +25,5 @@ def beautify_webhook_logs(file_path):
         json.dump(parsed_objects, f, indent=4)
 
 if __name__ == '__main__':
-    beautify_webhook_logs('c:/Users/Gigabyte/PycharmProjects/PythonProject/currency_api/webhook_logs.json')
+    # Store the webhook notification logs in a JSON file
+    beautify_webhook_logs('webhook_logs.json')
