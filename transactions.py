@@ -42,6 +42,9 @@ import time
 from typing import Dict, Any, List, Optional
 
 
+AUTHORIZATION_URL_TTL_SECONDS = 2 * 60 * 60  # Paystack authorization URLs expire after 2 hours
+
+
 # Location of the transaction store. This file is created if it does
 # not already exist. It is stored in the same directory as keys.json
 # and other data files.
@@ -119,6 +122,24 @@ def record_transaction(
     data.setdefault("transactions", []).append(txn)
     save_transactions(data)
     return txn
+
+
+def has_valid_authorization_url(
+    txn: Optional[Dict[str, Any]],
+    *,
+    ttl_seconds: int = AUTHORIZATION_URL_TTL_SECONDS,
+) -> bool:
+    """Return True if the transaction carries a reusable authorization URL."""
+    if not txn or txn.get("status") != "pending":
+        return False
+    if not txn.get("authorization_url"):
+        return False
+    created_at = txn.get("created_at") or txn.get("updated_at")
+    try:
+        created_ts = float(created_at)
+    except (TypeError, ValueError):
+        return False
+    return (time.time() - created_ts) < ttl_seconds
 
 
 def update_transactions_for_key(
