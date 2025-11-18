@@ -188,3 +188,38 @@ def get_latest_transaction_for_key(api_key_hash: str) -> Optional[Dict[str, Any]
         return None
     txns.sort(key=lambda t: t.get("created_at", 0), reverse=True)
     return txns[0]
+
+
+def find_transaction_by_reference(reference: str) -> Optional[Dict[str, Any]]:
+    """Return a transaction by its Paystack reference."""
+    for txn in load_transactions().get("transactions", []):
+        if txn.get("reference") == reference:
+            return txn
+    return None
+
+
+def update_transaction_by_reference(
+    reference: str,
+    *,
+    status: Optional[str] = None,
+    subscription_code: Optional[str] = None,
+    email_token: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Update a transaction identified by reference and persist it."""
+    data = load_transactions()
+    updated = None
+    for txn in data.get("transactions", []):
+        if txn.get("reference") != reference:
+            continue
+        if status is not None:
+            txn["status"] = status
+        if subscription_code is not None:
+            txn["subscription_code"] = subscription_code
+        if email_token is not None:
+            txn["email_token"] = email_token
+        txn["updated_at"] = time.time()
+        updated = txn
+        break
+    if updated:
+        save_transactions(data)
+    return updated

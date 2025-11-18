@@ -155,6 +155,24 @@ def verify_paystack_signature(body: bytes, signature: Optional[str]) -> bool:
     return hmac.compare_digest(computed, signature)
 
 
+def verify_transaction_reference(reference: str) -> Dict[str, Any]:
+    """Verify a Paystack transaction by reference.
+
+    This is useful when a webhook was missed; the reference can be
+    confirmed directly with Paystack to reconcile the subscription.
+    """
+    url = f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}"
+    resp = requests.get(url, headers=_get_headers(), timeout=10)
+    try:
+        data = resp.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid response from Paystack")
+    if not resp.ok or not data.get("status"):
+        detail = data.get("message", "Unknown error")
+        raise HTTPException(status_code=400, detail=f"Paystack verification failed: {detail}")
+    return data.get("data", {}) or {}
+
+
 def extract_webhook_info(body: bytes) -> Tuple[str, Optional[str], Optional[str], Dict[str, Any]]:
     """Extract key information from a Paystack webhook payload.
 

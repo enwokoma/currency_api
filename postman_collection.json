@@ -328,6 +328,18 @@
             "header": [{ "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }],
             "url": { "raw": "{{base_url}}/admin/transactions", "host": ["{{base_url}}"], "path": ["admin", "transactions"] }
           }
+        },
+        {
+          "name": "Admin Reconcile Transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"reference\": \"PS_ref_from_paystack_receipt\"\n}" },
+            "url": { "raw": "{{base_url}}/admin/reconcile-transaction", "host": ["{{base_url}}"], "path": ["admin", "reconcile-transaction"] }
+          }
         }
       ]
     },

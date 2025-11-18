@@ -486,6 +486,31 @@ Contact fields overwrite the stored contact (and remain unique).
 ```
 - Configure your Paystack dashboard to point webhooks at `/paystack/webhook`. The handler verifies the signature using `PAYSTACK_SECRET_KEY`. All events are recorded in `transactions.json`; you can poll `GET /transactions` (per key) or `GET /admin/transactions` to monitor incoming notifications and statuses.
 
+### Manual reconciliation (missed webhook) - `POST /admin/reconcile-transaction`
+- Header: `X-ADMIN-TOKEN: {{admin_token}}`
+- Body:
+```json
+{
+  "reference": "PS_ref_from_paystack_receipt"
+}
+```
+- What it does:
+  - Calls Paystack `/transaction/verify/{reference}` to confirm success when a webhook never arrived.
+  - Uses Paystack metadata (`api_key_hash` + `plan_code`) to upgrade the key, attach subscription_code/email_token, and mark the local transaction `success`.
+  - If the reference is unknown locally, it still upgrades the key and marks pending transactions for that key as `success`.
+- **Response 200**
+```json
+{
+  "status": "reconciled",
+  "key_hash": "...",
+  "plan_code": "BASIC_MONTHLY",
+  "subscription_code": "SUB_xxxx",
+  "email_token": "ETK_xxxx",
+  "key": { "...": "key record with updated subscription_status/plan_code" },
+  "transaction": { "...": "updated transaction record if found" }
+}
+```
+
 ---
 
 ## 4) Core Currency Endpoints (JSON bodies)

@@ -53,7 +53,11 @@ def load_usage() -> Dict[str, Any]:
     """Load the usage JSON document."""
     _ensure_file()
     with open(USAGE_FILE, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+        try:
+            return json.load(fh)
+        except json.JSONDecodeError:
+            # Recover gracefully if the file exists but is empty/corrupt
+            return {"usage": []}
 
 
 def save_usage(data: Dict[str, Any]) -> None:

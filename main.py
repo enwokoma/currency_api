@@ -90,6 +90,7 @@ from utils import validate_currency, fetch_rates, fetch_historical_rates
 from billing import (
     initialize_transaction,
     verify_paystack_signature,
+    verify_transaction_reference,
     extract_webhook_info,
     disable_subscription,
 )
@@ -100,6 +101,8 @@ from transactions import (
     get_transactions_for_key,
     get_pending_transaction_for_key,
     get_latest_transaction_for_key,
+    find_transaction_by_reference,
+    update_transaction_by_reference,
 )
 from usage_stats import record_usage_event, get_usage_map
 
@@ -298,6 +301,12 @@ class RevokeByPrefixPayload(BaseModel):
 class RegenerateByPrefixPayload(BaseModel):
     key_prefix: str
     password: str
+
+
+class ReconcileTransactionPayload(BaseModel):
+    """Admin-only payload to reconcile a Paystack transaction manually."""
+
+    reference: str
 
 
 class UpgradePayload(BaseModel):
@@ -1300,6 +1309,78 @@ async def paystack_webhook(request: Request) -> Dict[str, str]:
             update_transactions_for_key(api_key_hash, new_status=status)
     return {"status": "ok"}
 
+
+
+@app.post("/admin/reconcile-transaction", tags=["Admin"])
+def reconcile_transaction(
+    payload: ReconcileTransactionPayload,
+    _: bool = Depends(admin_required),
+) -> Dict[str, Any]:
+    """Manually reconcile a Paystack transaction when the webhook was missed.
+
+    This endpoint verifies the Paystack transaction reference, extracts
+    the key hash and plan metadata, and upgrades the key accordingly.
+    It also updates the stored transaction record with subscription
+    identifiers if provided by Paystack.
+    """
+    ref = payload.reference.strip()
+    if not ref:
+        raise HTTPException(status_code=400, detail="reference is required")
+    txn_data = verify_transaction_reference(ref)
+    status_flag = txn_data.get("status")
+    if status_flag != "success":
+        raise HTTPException(status_code=400, detail="Transaction is not marked successful on Paystack")
+    metadata = txn_data.get("metadata", {}) or {}
+    api_key_hash = metadata.get("api_key_hash")
+    plan_code = metadata.get("plan_code") or metadata.get("plan")
+    if not api_key_hash or not plan_code:
+        raise HTTPException(
+            status_code=400,
+            detail="Paystack metadata missing api_key_hash or plan_code; cannot reconcile automatically.",
+        )
+    plan = next((p for p in PLANS if p["code"] == plan_code), None)
+    if not plan:
+        raise HTTPException(status_code=400, detail="Plan from Paystack metadata is not recognised")
+    subscription = txn_data.get("subscription", {}) or {}
+    subscription_code = (
+        txn_data.get("subscription_code")
+        or subscription.get("subscription_code")
+        or subscription.get("code")
+    )
+    email_token = txn_data.get("email_token") or subscription.get("email_token")
+
+    # Upgrade the key to paid, even if previously pending. Allow revoked to be blocked.
+    upgrade_key_tier_by_hash(
+        key_hash=api_key_hash,
+        new_tier="paid",
+        plan=plan,
+        free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+        paystack_subscription_code=subscription_code,
+        paystack_email_token=email_token,
+        subscription_status="active",
+        active=True,
+    )
+    # Update transaction record (if we have it) with success + subscription identifiers.
+    updated_txn = update_transaction_by_reference(
+        ref,
+        status="success",
+        subscription_code=subscription_code,
+        email_token=email_token,
+    )
+    if not updated_txn:
+        # Fall back to updating all pending txns for that key if ref was not logged.
+        update_transactions_for_key(api_key_hash, new_status="success")
+    # Return the reconciled key record for confirmation.
+    record = next((k for k in load_keys().get("keys", []) if k.get("key_hash") == api_key_hash), None)
+    return {
+        "status": "reconciled",
+        "key_hash": api_key_hash,
+        "plan_code": plan_code,
+        "subscription_code": subscription_code,
+        "email_token": email_token,
+        "key": record,
+        "transaction": updated_txn or find_transaction_by_reference(ref),
+    }
 
 
 @app.post("/admin/generate-key", tags=["Admin"])
