@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
 
-from auth import generate_free_key
+from auth import generate_free_key, find_key_by_email
 from schemas import FreeKeyPayload, RegisterPayload, VerifyEmailPayload, LoginPayload
 from users import (
     create_user,
@@ -24,9 +24,16 @@ auth_router = APIRouter()
 @auth_router.post("/auth/free-key", tags=["Auth"])
 def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
     """Public endpoint to request a free-tier API key."""
+    email_norm = payload.email.strip().lower()
+    existing = find_key_by_email(email_norm, include_inactive=True, include_revoked=True)
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="A key already exists for this email. Please check your inbox or use /auth/register to manage keys.",
+        )
     raw = generate_free_key(
-        owner=payload.email.strip().lower(),
-        email=payload.email,
+        owner=email_norm,
+        email=email_norm,
         first_name=payload.first_name,
         last_name=payload.last_name,
     )
