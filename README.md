@@ -71,7 +71,7 @@ Full request/response samples for every endpoint live in `DOCS.md`.
 
 ---
 
-## Testing
+## Testing User Management System
 
 The user management smoke tests have been executed with the project virtual environment:
 

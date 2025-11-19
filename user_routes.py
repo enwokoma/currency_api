@@ -134,6 +134,18 @@ def _rotate_key_record(record: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     raise HTTPException(status_code=404, detail="API key not found")
 
 
+def _claim_keys_for_user(user_id: str, email: str) -> None:
+    """Reassign legacy keys owned by email to the newly registered user id."""
+    data = load_keys()
+    modified = False
+    for record in data.get("keys", []):
+        if record.get("owner") == email and record.get("email") == email:
+            record["owner"] = user_id
+            modified = True
+    if modified:
+        save_keys(data)
+
+
 @user_router.get("/user", tags=["User"])
 def get_current_user(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
     """Return the current user's profile (sanitized)."""
@@ -265,6 +277,7 @@ def regenerate_my_key_by_prefix(
 @user_router.get("/user/keys", tags=["User"])
 def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
     """List all API keys owned by the current user."""
+    _claim_keys_for_user(user["id"], user.get("email", "").lower())
     data = load_keys()
     owned = []
     for record in data.get("keys", []):
@@ -301,6 +314,7 @@ def usage_snapshot(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str,
 @user_router.get("/user/usage", tags=["User"])
 def list_user_usage(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
     """Return usage details for all keys owned by the session user."""
+    _claim_keys_for_user(user["id"], user.get("email", "").lower())
     data = load_keys()
     usage_map = get_usage_map()
     summaries = []
