@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 
+import env  # noqa: F401  # ensures .env is loaded before reading os.getenv
+
 # Load Paystack plan codes from environment. These environment
 # variables should be defined in your .env file or the deployment
 # environment. They map our internal plan codes to the codes defined

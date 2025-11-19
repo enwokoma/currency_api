@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import secrets
 
+import env  # noqa: F401  # ensure .env is loaded before reading os.getenv
+
 ADMIN_FILE = "admin_token.txt"
 
 
