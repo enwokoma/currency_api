@@ -1,424 +1,1169 @@
 {
   "info": {
     "name": "Currency Conversion API",
-    "_postman_id": "2b7f5a1e-3f5c-4f05-9a3b-d7c1e3f9c001",
-    "description": "End-to-end collection for the Currency Conversion API. Set variables before running requests.",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    "description": "Fast, cached currency conversion API using Fawaz Ahmed's Exchange API with fallback provider, API keys, rate limiting, free and paid tiers, and Paystack subscription upgrades.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "3.1.0"
   },
-  "variable": [
-    { "key": "base_url", "value": "http://localhost:8000" },
-    { "key": "admin_token", "value": "" },
-    { "key": "session_token", "value": "" },
-    { "key": "free_api_key", "value": "" },
-    { "key": "free_api_key_prefix", "value": "" },
-    { "key": "paid_api_key", "value": "" },
-    { "key": "plan_code", "value": "BASIC_MONTHLY" },
-    { "key": "user_first_name", "value": "Demo" },
-    { "key": "user_last_name", "value": "User" },
-    { "key": "contact_email", "value": "{{user_email}}" },
-    { "key": "contact_first_name", "value": "{{user_first_name}}" },
-    { "key": "contact_last_name", "value": "{{user_last_name}}" },
-    { "key": "user_email", "value": "user@example.com" },
-    { "key": "user_password", "value": "StrongPass123" },
-    { "key": "verification_otp", "value": "" },
-    { "key": "verification_token", "value": "" }
-  ],
   "item": [
-    {
-      "name": "Health",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
-      }
-    },
-    {
-      "name": "Auth & Sessions",
-      "item": [
-        {
-          "name": "Register",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"first_name\": \"{{user_first_name}}\",\n  \"last_name\": \"{{user_last_name}}\",\n  \"email\": \"{{user_email}}\",\n  \"password\": \"{{user_password}}\",\n  \"confirm_password\": \"{{user_password}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] }
-          }
-        },
-        {
-          "name": "Verify Email (OTP or token)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{user_email}}\",\n  \"otp\": \"{{verification_otp}}\",\n  \"token\": \"{{verification_token}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/auth/verify-email", "host": ["{{base_url}}"], "path": ["auth", "verify-email"] }
-          }
-        },
-        {
-          "name": "Resend Verification",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{ \"email\": \"{{user_email}}\" }" },
-            "url": { "raw": "{{base_url}}/auth/resend-verification", "host": ["{{base_url}}"], "path": ["auth", "resend-verification"] }
-          }
-        },
-        {
-          "name": "Login",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{ \"email\": \"{{user_email}}\", \"password\": \"{{user_password}}\" }" },
-            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
-          }
-        },
-        {
-          "name": "Current User",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
-            "url": { "raw": "{{base_url}}/user", "host": ["{{base_url}}"], "path": ["user"] }
-          }
-        },
-        {
-          "name": "Logout",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
-            "url": { "raw": "{{base_url}}/auth/logout", "host": ["{{base_url}}"], "path": ["auth", "logout"] }
-          }
-        }
-      ]
-    },
-    {
-      "name": "Keys",
-      "item": [
-        {
-          "name": "Public Free Key",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{user_email}}\",\n  \"first_name\": \"{{user_first_name}}\",\n  \"last_name\": \"{{user_last_name}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/auth/free-key", "host": ["{{base_url}}"], "path": ["auth", "free-key"] }
-          }
-        },
-        {
-          "name": "Create Key (session)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"tier\": \"free\",\n  \"email\": \"{{user_email}}\",\n  \"first_name\": \"{{user_first_name}}\",\n  \"last_name\": \"{{user_last_name}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/auth/create-key", "host": ["{{base_url}}"], "path": ["auth", "create-key"] }
-          }
-        },
-        {
-          "name": "List User Keys",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
-            "url": { "raw": "{{base_url}}/user/keys", "host": ["{{base_url}}"], "path": ["user", "keys"] }
-          }
-        },
-        {
-          "name": "Revoke My Key",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"api_key\": \"{{free_api_key}}\",\n  \"password\": \"{{user_password}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/user/keys/revoke", "host": ["{{base_url}}"], "path": ["user", "keys", "revoke"] }
-          }
-        },
-        {
-          "name": "Regenerate My Key",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"api_key\": \"{{free_api_key}}\",\n  \"password\": \"{{user_password}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/user/keys/regenerate", "host": ["{{base_url}}"], "path": ["user", "keys", "regenerate"] }
-          }
-        },
-        {
-          "name": "Revoke My Key (by prefix)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"key_prefix\": \"a682fc97\",\n  \"password\": \"{{user_password}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/user/keys/revoke-by-prefix", "host": ["{{base_url}}"], "path": ["user", "keys", "revoke-by-prefix"] }
-          }
-        },
-        {
-          "name": "Regenerate My Key (by prefix)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"key_prefix\": \"a682fc97\",\n  \"password\": \"{{user_password}}\"\n}"
-            },
-            "url": { "raw": "{{base_url}}/user/keys/regenerate-by-prefix", "host": ["{{base_url}}"], "path": ["user", "keys", "regenerate-by-prefix"] }
-          }
-        },
-        {
-          "name": "Usage (API Key)",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "X-API-KEY", "value": "{{free_api_key}}" }],
-            "url": { "raw": "{{base_url}}/usage", "host": ["{{base_url}}"], "path": ["usage"] }
-          }
-        },
-        {
-          "name": "User Usage (session)",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "X-SESSION-TOKEN", "value": "{{session_token}}" }],
-            "url": { "raw": "{{base_url}}/user/usage", "host": ["{{base_url}}"], "path": ["user", "usage"] }
-          }
-        },
-        {
-          "name": "Admin Generate Key",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"owner\": \"ops\",\n  \"email\": \"adminkey@example.com\",\n  \"first_name\": \"Ops\",\n  \"last_name\": \"Team\",\n  \"plan_code\": null,\n  \"activate\": true\n}"
-            },
-            "url": { "raw": "{{base_url}}/admin/generate-key", "host": ["{{base_url}}"], "path": ["admin", "generate-key"] }
-          }
-        },
-        {
-          "name": "Admin Revoke Key",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"api_key\": \"{{free_api_key}}\" }" },
-            "url": { "raw": "{{base_url}}/admin/revoke-key", "host": ["{{base_url}}"], "path": ["admin", "revoke-key"] }
-          }
-        },
-        {
-          "name": "Admin Unrevoke Key",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"api_key\": \"{{free_api_key}}\", \"subscription_status\": \"active\" }" },
-            "url": { "raw": "{{base_url}}/admin/unrevoke-key", "host": ["{{base_url}}"], "path": ["admin", "unrevoke-key"] }
-          }
-        },
-        {
-          "name": "Admin Usage",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }],
-            "url": { "raw": "{{base_url}}/admin/usage", "host": ["{{base_url}}"], "path": ["admin", "usage"] }
-          }
-        },
-        {
-          "name": "Admin List Keys",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }],
-            "url": { "raw": "{{base_url}}/admin/keys", "host": ["{{base_url}}"], "path": ["admin", "keys"] }
-          }
-        }
-      ]
-    },
     {
       "name": "Billing",
       "item": [
         {
-          "name": "Plans",
+          "name": "List Plans",
           "request": {
+            "name": "List Plans",
             "method": "GET",
             "header": [],
-            "url": { "raw": "{{base_url}}/plans", "host": ["{{base_url}}"], "path": ["plans"] }
-          }
-        },
-        {
-          "name": "Subscribe (new paid key)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"plan_code\": \"{{plan_code}}\",\n  \"email\": \"{{user_email}}\",\n  \"first_name\": \"{{user_first_name}}\",\n  \"last_name\": \"{{user_last_name}}\",\n  \"owner\": \"public-user\"\n}"
+            "url": {
+              "raw": "{{base_url}}/plans",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "plans"
+              ]
             },
-            "url": { "raw": "{{base_url}}/billing/subscribe", "host": ["{{base_url}}"], "path": ["billing", "subscribe"] }
-          }
+            "description": "Public endpoint to list available subscription plans."
+          },
+          "response": []
         },
         {
-          "name": "Upgrade Existing Key",
+          "name": "Billing Subscribe",
           "request": {
+            "name": "Billing Subscribe",
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{free_api_key}}" },
-              { "key": "X-API-KEY-PREFIX", "value": "{{free_api_key_prefix}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
+            "url": {
+              "raw": "{{base_url}}/billing/subscribe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "billing",
+                "subscribe"
+              ]
+            },
+            "description": "Create a paid key and immediately start Paystack checkout (public).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"plan_code\": \"{{plan_code}}\",\n  \"email\": \"{{user_email}}\",\n  \"first_name\": \"{{user_first_name}}\",\n  \"last_name\": \"{{user_last_name}}\"\n}"
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Billing Upgrade",
+          "request": {
+            "name": "Billing Upgrade",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/billing/upgrade",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "billing",
+                "upgrade"
+              ]
             },
-            "url": { "raw": "{{base_url}}/billing/upgrade", "host": ["{{base_url}}"], "path": ["billing", "upgrade"] }
-          }
+            "description": "Start a Paystack transaction to upgrade a free key to a paid plan.\n\nThe caller must supply a ``plan_code`` that exists in ``PLANS``.\nContact information is taken from the payload if provided, else\nfrom the key record. The API key used for authentication will\ndetermine which key is upgraded.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         },
         {
           "name": "Cancel Subscription",
           "request": {
+            "name": "Cancel Subscription",
             "method": "POST",
-            "header": [{ "key": "X-API-KEY", "value": "{{paid_api_key}}" }],
-            "url": { "raw": "{{base_url}}/billing/cancel", "host": ["{{base_url}}"], "path": ["billing", "cancel"] }
-          }
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/billing/cancel",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "billing",
+                "cancel"
+              ]
+            },
+            "description": "Cancel/deactivate the current subscription for the calling key."
+          },
+          "response": []
         },
         {
-          "name": "My Transactions",
+          "name": "List My Transactions",
           "request": {
+            "name": "List My Transactions",
             "method": "GET",
-            "header": [{ "key": "X-API-KEY", "value": "{{paid_api_key}}" }],
-            "url": { "raw": "{{base_url}}/transactions", "host": ["{{base_url}}"], "path": ["transactions"] }
-          }
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/transactions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "transactions"
+              ]
+            },
+            "description": "Return the transaction history for the calling user's API key."
+          },
+          "response": []
         },
         {
-          "name": "Admin Transactions",
+          "name": "Paystack Webhook",
           "request": {
-            "method": "GET",
-            "header": [{ "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }],
-            "url": { "raw": "{{base_url}}/admin/transactions", "host": ["{{base_url}}"], "path": ["admin", "transactions"] }
-          }
-        },
-        {
-          "name": "Admin Reconcile Transaction",
-          "request": {
+            "name": "Paystack Webhook",
             "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-ADMIN-TOKEN", "value": "{{admin_token}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{\n  \"reference\": \"PS_ref_from_paystack_receipt\"\n}" },
-            "url": { "raw": "{{base_url}}/admin/reconcile-transaction", "host": ["{{base_url}}"], "path": ["admin", "reconcile-transaction"] }
-          }
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/paystack/webhook",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "paystack",
+                "webhook"
+              ]
+            },
+            "description": "Handle Paystack webhook events for subscription management."
+          },
+          "response": []
         }
       ]
     },
     {
-      "name": "Core Currency",
+      "name": "Auth",
       "item": [
         {
-          "name": "Rate",
+          "name": "Get Free Key",
           "request": {
+            "name": "Get Free Key",
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
-            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"USD\", \"to_currency\": \"NGN\" }" },
-            "url": { "raw": "{{base_url}}/rate", "host": ["{{base_url}}"], "path": ["rate"] }
-          }
-        },
-        {
-          "name": "Convert",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"EUR\", \"to_currency\": \"USD\", \"amount\": 50 }" },
-            "url": { "raw": "{{base_url}}/convert", "host": ["{{base_url}}"], "path": ["convert"] }
-          }
-        },
-        {
-          "name": "All Rates (base)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{free_api_key}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"base_currency\": \"USD\" }" },
-            "url": { "raw": "{{base_url}}/rates", "host": ["{{base_url}}"], "path": ["rates"] }
-          }
-        },
-        {
-          "name": "Historical Rate (paid)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{paid_api_key}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"USD\", \"to_currency\": \"EUR\", \"date\": \"2024-12-31\" }" },
-            "url": { "raw": "{{base_url}}/rate/historical", "host": ["{{base_url}}"], "path": ["rate", "historical"] }
-          }
-        },
-        {
-          "name": "Historical Convert (paid)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{paid_api_key}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"from_currency\": \"GBP\", \"to_currency\": \"USD\", \"date\": \"2024-12-15\", \"amount\": 250 }" },
-            "url": { "raw": "{{base_url}}/convert/historical", "host": ["{{base_url}}"], "path": ["convert", "historical"] }
-          }
-        },
-        {
-          "name": "Historical Rates (base, paid)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-KEY", "value": "{{paid_api_key}}" }
-            ],
-            "body": { "mode": "raw", "raw": "{ \"base_currency\": \"USD\", \"date\": \"2024-12-31\" }" },
-            "url": { "raw": "{{base_url}}/rates/historical", "host": ["{{base_url}}"], "path": ["rates", "historical"] }
-          }
+            "url": {
+              "raw": "{{base_url}}/auth/free-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "free-key"
+              ]
+            },
+            "description": "Public endpoint to request a free-tier API key.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         }
       ]
+    },
+    {
+      "name": "User",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "name": "Register User",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Register a new user.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Resend Verification",
+          "request": {
+            "name": "Resend Verification",
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/resend-verification",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "resend-verification"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Resend the verification code/link for an unverified user."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Email",
+          "request": {
+            "name": "Verify Email",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/verify-email",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "verify-email"
+              ]
+            },
+            "description": "Verify a user's email address via OTP or token.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Email Via Link",
+          "request": {
+            "name": "Verify Email Via Link",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/verify-email",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "verify-email"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "",
+                  "description": "Email address to verify"
+                },
+                {
+                  "key": "token",
+                  "value": "",
+                  "description": "Verification token from email link"
+                }
+              ]
+            },
+            "description": "Verify a user's email via direct link (token + email query params)."
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "request": {
+            "name": "Login",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Authenticate a user and issue a session token.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "name": "Logout",
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Revoke an active session token."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "name": "Get Current User",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/user",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user"
+              ]
+            },
+            "description": "Return the current user's profile (sanitized)."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Key",
+          "request": {
+            "name": "Create Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/create-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "create-key"
+              ]
+            },
+            "description": "Create a new API key for the current user.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke My Key",
+          "request": {
+            "name": "Revoke My Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/user/keys/revoke",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "keys",
+                "revoke"
+              ]
+            },
+            "description": "Revoke a key owned by the logged-in user after password confirmation.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Regenerate My Key",
+          "request": {
+            "name": "Regenerate My Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/user/keys/regenerate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "keys",
+                "regenerate"
+              ]
+            },
+            "description": "Rotate a user's API key (invalidates the old key) after password confirmation.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke My Key By Prefix",
+          "request": {
+            "name": "Revoke My Key By Prefix",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/user/keys/revoke-by-prefix",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "keys",
+                "revoke-by-prefix"
+              ]
+            },
+            "description": "Revoke a key using its prefix (for users who misplaced the raw key).",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Regenerate My Key By Prefix",
+          "request": {
+            "name": "Regenerate My Key By Prefix",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/user/keys/regenerate-by-prefix",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "keys",
+                "regenerate-by-prefix"
+              ]
+            },
+            "description": "Rotate a key using its prefix (no need to provide the raw key).",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List User Keys",
+          "request": {
+            "name": "List User Keys",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/user/keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "keys"
+              ]
+            },
+            "description": "List all API keys owned by the current user."
+          },
+          "response": []
+        },
+        {
+          "name": "List User Usage",
+          "request": {
+            "name": "List User Usage",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/user/usage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "usage"
+              ]
+            },
+            "description": "Return usage details for all keys owned by the session user."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Utility",
+      "item": [
+        {
+          "name": "Usage Snapshot",
+          "request": {
+            "name": "Usage Snapshot",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/usage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "usage"
+              ]
+            },
+            "description": "Return usage details for the calling API key."
+          },
+          "response": []
+        },
+        {
+          "name": "Health",
+          "request": {
+            "name": "Health",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Health check endpoint (no authentication required)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Usage",
+      "item": [
+        {
+          "name": "Get Usage",
+          "request": {
+            "name": "Get Usage",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/me/usage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "me",
+                "usage"
+              ]
+            },
+            "description": "Return remaining credits and rate limits for the caller's API key."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Reconcile Transaction",
+          "request": {
+            "name": "Reconcile Transaction",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/reconcile-transaction",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "reconcile-transaction"
+              ]
+            },
+            "description": "Manually reconcile a Paystack transaction when the webhook was missed.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin Generate Key",
+          "request": {
+            "name": "Admin Generate Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/generate-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "generate-key"
+              ]
+            },
+            "description": "Admin endpoint to generate a new paid API key.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin Revoke Key",
+          "request": {
+            "name": "Admin Revoke Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/revoke-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "revoke-key"
+              ]
+            },
+            "description": "Admin endpoint to revoke an existing API key.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin Unrevoke Key",
+          "request": {
+            "name": "Admin Unrevoke Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/unrevoke-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "unrevoke-key"
+              ]
+            },
+            "description": "Admin endpoint to reactivate a previously revoked/inactive API key.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin Usage",
+          "request": {
+            "name": "Admin Usage",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/usage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "usage"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "",
+                  "description": ""
+                },
+                {
+                  "key": "page_size",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Return paginated usage summaries for all keys (admin)."
+          },
+          "response": []
+        },
+        {
+          "name": "List All Transactions",
+          "request": {
+            "name": "List All Transactions",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/transactions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "",
+                  "description": ""
+                },
+                {
+                  "key": "page_size",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Return the transaction history for all API keys (admin only)."
+          },
+          "response": []
+        },
+        {
+          "name": "Admin List Keys",
+          "request": {
+            "name": "Admin List Keys",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "keys"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "",
+                  "description": ""
+                },
+                {
+                  "key": "page_size",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Admin endpoint to list all API keys (with masked hashes)."
+          },
+          "response": []
+        },
+        {
+          "name": "Admin List Users",
+          "request": {
+            "name": "Admin List Users",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/users",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "",
+                  "description": ""
+                },
+                {
+                  "key": "page_size",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Admin endpoint to list all users (sanitized, paginated)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Core",
+      "item": [
+        {
+          "name": "Get All Rates",
+          "request": {
+            "name": "Get All Rates",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rates",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rates"
+              ]
+            },
+            "description": "Return all current rates for a base currency.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Rate",
+          "request": {
+            "name": "Get Rate",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rate"
+              ]
+            },
+            "description": "Retrieve the conversion rate from one currency to another.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Convert Currency",
+          "request": {
+            "name": "Convert Currency",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/convert",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "convert"
+              ]
+            },
+            "description": "Convert an amount from one currency to another.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Historical Rates Endpoint",
+          "request": {
+            "name": "Get Historical Rates Endpoint",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rates/historical",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rates",
+                "historical"
+              ]
+            },
+            "description": "Retrieve all rates for a base currency on a specific date (paid only).",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Historical Rate",
+          "request": {
+            "name": "Get Historical Rate",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rate/historical",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rate",
+                "historical"
+              ]
+            },
+            "description": "Retrieve a historical conversion rate between two currencies (paid only).",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Convert Currency Historical",
+          "request": {
+            "name": "Convert Currency Historical",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/convert/historical",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "convert",
+                "historical"
+              ]
+            },
+            "description": "Convert an amount between two currencies on a specific date (paid only).",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
     }
   ]
 }

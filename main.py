@@ -85,6 +85,7 @@ from billing_routes import billing_router
 from auth_routes import auth_router
 from user_routes import user_router
 from admin_routes import admin_router
+from postman_exporter import export_postman_collection
 
 from webhook_logs import log_webhook_event
 
@@ -175,6 +176,14 @@ app.include_router(billing_router)
 app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(admin_router)
+
+
+@app.on_event("startup")
+async def generate_postman():
+    try:
+        export_postman_collection(app)
+    except Exception as exc:
+        print(f"[postman-export] Failed to refresh collection: {exc}")
 
 
 # Middleware: logging requests and pretty JSON formatting

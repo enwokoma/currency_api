@@ -10,8 +10,9 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
 - Direct paid provisioning via `POST /billing/subscribe` (no need to create a free key first), plus upgrades for existing keys and `POST /billing/cancel` to disable a subscription on Paystack and downgrade to free.
 - Currency lookups and conversions now accept **JSON bodies** (`POST /rate`, `/convert`, `/rates`) with historical endpoints (`/rate/historical`, `/convert/historical`, `/rates/historical`) available exclusively to paid keys.
 - Paystack webhook handling upgrades/downgrades keys, records transactions, and captures subscription codes for cancellation.
-- Per-key usage counters with `/usage`, `/user/usage`, and `/admin/usage` to see request counts, billable calls, and remaining credits.
+- Per-key usage counters with `/usage`, `/user/usage`, and `/admin/usage` (now paginated) to see request counts, billable calls, and remaining credits.
 - Built-in user management (register/verify/login/logout), session tokens, admin token-protected endpoints, and JSON-based persistence (`keys.json`, `transactions.json`, `users.json`, `sessions.json`).
+- Automatically refreshed Postman collection on every app startup (the server regenerates `postman_collection.json` from the live OpenAPI schema, so new endpoints and changes are immediately reflected).
 
 ---
 
@@ -26,6 +27,7 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
    - `PAYSTACK_SECRET_KEY` (required for real billing)
    - `PAYSTACK_PLAN_BASIC`, `PAYSTACK_PLAN_PRO` (Paystack plan codes)
    - Optional: `ADMIN_TOKEN` (otherwise written to `admin_token.txt` on first run)
+   > Tip: drop these values inside `.env`; the app auto-loads it on import so `uvicorn`/tests pick them up without manual exporting.
 3. **Run the API**
    ```bash
    ./.venv/Scripts/python -m uvicorn main:app --reload
@@ -36,17 +38,17 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
 
 ## Usage Map (concise)
 
-- **Users**: `POST /auth/register` -> `POST /auth/verify-email` -> `POST /auth/login` (stores session token in `X-SESSION-TOKEN`).
+- **Users**: `POST /auth/register` -> `POST /auth/verify-email` (OTP OR token, never both) or `GET /auth/verify-email?email=...&token=...` -> `POST /auth/login` (stores session token in `X-SESSION-TOKEN`).
 - **Key creation (requires email/name)**:
-  - Public: `POST /auth/free-key` (free tier).
+  - Public: `POST /auth/free-key` (free tier). Email uniqueness is enforced globally—once an email owns a key (free or paid), additional calls will return 400.
   - Authenticated: `POST /auth/create-key` with `tier` = `free` or `paid` (paid keys remain inactive with `subscription_status=pending` until upgraded via billing).
   - Admin: `POST /admin/generate-key` (paid, optional plan), `POST /admin/revoke-key`.
-  - Listing: `GET /user/keys`, `GET /admin/keys`.
+  - Listing: `GET /user/keys` (auto-claims any public key created with the user's email), `GET /admin/keys` (paginated). Admins can also fetch every registered user via `GET /admin/users`.
 - **Billing**:
   - Create paid key + checkout: `POST /billing/subscribe` (public).
   - Upgrade existing key: `POST /billing/upgrade` (uses caller's API key contact details).
   - Cancel: `POST /billing/cancel` (paid key required).
-  - Plans/transactions: `GET /plans`, `GET /transactions`, `GET /admin/transactions`.
+  - Plans/transactions: `GET /plans`, `GET /transactions`, `GET /admin/transactions` (paginated).
   - Webhooks: `POST /paystack/webhook` (expects Paystack signature).
 - **Core currency endpoints (JSON bodies only)**:
   - Current: `POST /rate`, `POST /convert`, `POST /rates`.
@@ -60,7 +62,7 @@ Full request/response samples for every endpoint live in `DOCS.md`.
 ## Documentation & Tools
 
 - **Detailed docs**: See [`DOCS.md`](DOCS.md) for endpoint-by-endpoint request/response bodies, headers, and workflow notes.
-- **Postman collection**: Import `postman_collection.json` and set variables:
+- **Postman collection**: Import `postman_collection.json` (auto-regenerated on app startup so it's always current) and set variables:
   - `base_url` (e.g., `http://localhost:8000`)
   - `admin_token`, `session_token`, `free_api_key`, `paid_api_key`, `plan_code`
   - Optional: `user_first_name`, `user_last_name`, `user_email`, `user_password` (default bodies use these). Override contact with `contact_email`, `contact_first_name`, `contact_last_name` only if you want a different billing contact.
