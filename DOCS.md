@@ -9,6 +9,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   - Admin token: `X-ADMIN-TOKEN: {{admin_token}}`
 - **Identity rule**: Every API key must carry a unique `email`, `first_name`, and `last_name`. Attempts to reuse an email for another key return HTTP 400.
 - **JSON-only core endpoints**: `/rate`, `/convert`, `/rates`, `/rate/historical`, `/convert/historical`, `/rates/historical`.
+- **Postman collection**: `postman_collection.json` is regenerated on each app startup so it always reflects the current OpenAPI schema.
 
 ---
 
@@ -51,6 +52,8 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   "otp": "584201"
 }
 ```
+> Provide **exactly one** of `otp` or `token`. Supplying both (or neither) now returns HTTP 400.
+
 **Response 200**
 ```json
 {
@@ -64,6 +67,24 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   }
 }
 ```
+
+### Direct verification link - `GET /auth/verify-email?email=...&token=...`
+- Query params: `email`, `token`
+
+```http
+GET /auth/verify-email?email=ada@example.com&token=verify_xxx
+```
+**Response 200**
+```json
+{
+  "message": "Email verified successfully.",
+  "user": {
+    "id": "uuid",
+    "email": "ada@example.com"
+  }
+}
+```
+Use this form for “click-to-verify” links in future email integrations.
 
 ### Resend verification - `POST /auth/resend-verification`
 ```json
@@ -147,6 +168,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   "note": "Free keys have limited quota. Upgrade for higher limits."
 }
 ```
+> **Important**: Emails are globally unique across free and paid keys. If an email already owns a key, this endpoint returns HTTP 400 instructing you to reuse or upgrade the existing key.
 
 ### Create key (session) - `POST /auth/create-key`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
@@ -177,6 +199,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 
 ### List user keys - `GET /user/keys`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
+> On first login, any public key previously created with the user's email is automatically claimed so it appears in this list.
 **Response 200**
 ```json
 [
@@ -254,42 +277,26 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   "subscription_status": "active"
 }
 ```
-### Admin list keys - `GET /admin/keys`
+### Admin list users - `GET /admin/users`
 - Header: `X-ADMIN-TOKEN: {{admin_token}}`
+- Query: `page` (default 1), `page_size` (default 50, max 200)
 **Response 200**
 ```json
-[
-  {
-    "api_key_prefix": "prefix1...",
-    "tier": "paid",
-    "plan_code": "PRO_MONTHLY",
-    "subscription_status": "active",
-    "contact": {
-      "email": "paid.user@example.com",
-      "first_name": "Paid",
-      "last_name": "User"
-    },
-    "created_at": "2025-01-01T12:00:00Z",
-    "upgraded_at": "2025-01-10T10:00:00Z",
-    "revoked_at": null,
-    "paystack_subscription_code": "sub_xxxxxxxx"
-  },
-  {
-    "api_key_prefix": "prefix2...",
-    "tier": "free",
-    "plan_code": null,
-    "subscription_status": "free",
-    "contact": {
-      "email": "free.user@example.com",
-      "first_name": "Free",
-      "last_name": "User"
-    },
-    "created_at": "2025-01-15T14:30:00Z",
-    "upgraded_at": null,
-    "revoked_at": null,
-    "paystack_subscription_code": null
-  }
-]
+{
+  "items": [
+    {
+      "id": "uuid",
+      "email": "ada@example.com",
+      "first_name": "Ada",
+      "last_name": "Lovelace",
+      "email_verified": true,
+      "created_at": "2025-01-01T12:00:00Z"
+    }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 1
+}
 ```
 
 ### Admin revoke key - `POST /admin/revoke-key`
@@ -306,40 +313,31 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 
 ### Admin list keys - `GET /admin/keys`
 - Headers: `X-ADMIN-TOKEN`
+- Query: `page`, `page_size`
 **Response 200**
 ```json
-[
-  {
-    "api_key_prefix": "prefix1...",
-    "tier": "paid",
-    "plan_code": "PRO_MONTHLY",
-    "subscription_status": "active",
-    "contact": {
-      "email": "paid.user@example.com",
-      "first_name": "Paid",
-      "last_name": "User"
-    },
-    "created_at": "2025-01-01T12:00:00Z",
-    "upgraded_at": "2025-01-10T10:00:00Z",
-    "revoked_at": null,
-    "paystack_subscription_code": "sub_xxxxxxxx"
-  },
-  {
-    "api_key_prefix": "prefix2...",
-    "tier": "free",
-    "plan_code": null,
-    "subscription_status": "free",
-    "contact": {
-      "email": "free.user@example.com",
-      "first_name": "Free",
-      "last_name": "User"
-    },
-    "created_at": "2025-01-15T14:30:00Z",
-    "upgraded_at": null,
-    "revoked_at": null,
-    "paystack_subscription_code": null
-  }
-]
+{
+  "items": [
+    {
+      "api_key_prefix": "prefix1...",
+      "tier": "paid",
+      "plan_code": "PRO_MONTHLY",
+      "subscription_status": "active",
+      "contact": {
+        "email": "paid.user@example.com",
+        "first_name": "Paid",
+        "last_name": "User"
+      },
+      "created_at": "2025-01-01T12:00:00Z",
+      "upgraded_at": "2025-01-10T10:00:00Z",
+      "revoked_at": null,
+      "paystack_subscription_code": "sub_xxxxxxxx"
+    }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 2
+}
 ```
 
 ---
@@ -451,29 +449,25 @@ Contact fields overwrite the stored contact (and remain unique).
   }
 ]
 ```
-- `GET /admin/transactions` - header `X-ADMIN-TOKEN` -> returns all transactions.
+- `GET /admin/transactions` - header `X-ADMIN-TOKEN` (query: `page`, `page_size`) -> returns all transactions, paginated.
 **Response 200**
 ```json
-[
-  {
-    "transaction_id": "txn_xxxxxxxx",
-    "api_key_prefix": "prefix1...",
-    "plan_code": "PRO_MONTHLY",
-    "status": "success",
-    "amount": 5000,
-    "currency": "NGN",
-    "timestamp": "2025-01-10T10:00:00Z"
-  },
-  {
-    "transaction_id": "txn_yyyyyyyy",
-    "api_key_prefix": "prefix2...",
-    "plan_code": "BASIC_MONTHLY",
-    "status": "failed",
-    "amount": 2000,
-    "currency": "NGN",
-    "timestamp": "2025-01-11T11:00:00Z"
-  }
-]
+{
+  "items": [
+    {
+      "transaction_id": "txn_xxxxxxxx",
+      "api_key_prefix": "prefix1...",
+      "plan_code": "PRO_MONTHLY",
+      "status": "success",
+      "amount": 5000,
+      "currency": "NGN",
+      "timestamp": "2025-01-10T10:00:00Z"
+    }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 2
+}
 ```
 
 ### Paystack webhook - `POST /paystack/webhook`

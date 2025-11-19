@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 
 from auth import generate_free_key, find_key_by_email
 from schemas import FreeKeyPayload, RegisterPayload, VerifyEmailPayload, LoginPayload
@@ -84,12 +84,28 @@ def resend_verification(email: str) -> Dict[str, Any]:
 @auth_router.post("/auth/verify-email", tags=["User"])
 def verify_email(payload: VerifyEmailPayload) -> Dict[str, Any]:
     """Verify a user's email address via OTP or token."""
-    if not payload.otp and not payload.token:
-        raise HTTPException(status_code=400, detail="Provide either otp or token")
+    if bool(payload.otp) == bool(payload.token):
+        raise HTTPException(status_code=400, detail="Provide either otp or token (but not both)")
     user = verify_user(
         email=payload.email.strip().lower(),
         otp=payload.otp,
         token=payload.token,
+    )
+    return {
+        "message": "Email verified successfully.",
+        "user": sanitize_user(user),
+    }
+
+
+@auth_router.get("/auth/verify-email", tags=["User"])
+def verify_email_via_link(
+    email: str = Query(..., description="Email address to verify"),
+    token: str = Query(..., description="Verification token from email link"),
+) -> Dict[str, Any]:
+    """Verify a user's email via direct link (token + email query params)."""
+    user = verify_user(
+        email=email.strip().lower(),
+        token=token,
     )
     return {
         "message": "Email verified successfully.",
