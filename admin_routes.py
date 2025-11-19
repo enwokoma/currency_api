@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import (
     generate_api_key,
@@ -29,8 +29,21 @@ from transactions import (
     update_transaction_by_reference,
     update_transactions_for_key,
 )
+from users import load_users, save_users, sanitize_user
 
 admin_router = APIRouter(tags=["Admin"])
+
+
+def _paginate(items: List[Any], page: int, page_size: int) -> Dict[str, Any]:
+    total = len(items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return {
+        "items": items[start:end],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
 
 
 @admin_router.post("/admin/reconcile-transaction")
@@ -176,8 +189,12 @@ def admin_unrevoke_key(
 
 
 @admin_router.get("/admin/usage")
-def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
-    """Return usage summaries for all keys (admin)."""
+def admin_usage(
+    _: bool = Depends(admin_required),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Return paginated usage summaries for all keys (admin)."""
     from usage_stats import get_usage_map
     usage_map = get_usage_map()
     data = load_keys()
@@ -198,18 +215,26 @@ def admin_usage(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                 "last_request_at": to_wat_iso(tracked.get("last_request_at")),
             }
         )
-    return {"usage": summaries}
+    return _paginate(summaries, page, page_size)
 
 
 @admin_router.get("/admin/transactions")
-def list_all_transactions(_: bool = Depends(admin_required)) -> Dict[str, Any]:
+def list_all_transactions(
+    _: bool = Depends(admin_required),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
     """Return the transaction history for all API keys (admin only)."""
     txns = load_transactions().get("transactions", [])
-    return {"transactions": txns}
+    return _paginate(txns, page, page_size)
 
 
 @admin_router.get("/admin/keys")
-def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
+def admin_list_keys(
+    _: bool = Depends(admin_required),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
     """Admin endpoint to list all API keys (with masked hashes)."""
     data = load_keys()
     keys_out = []
@@ -233,4 +258,16 @@ def admin_list_keys(_: bool = Depends(admin_required)) -> Dict[str, Any]:
                 "key_prefix": key.get("key_hash", "")[:8] + ".",
             }
         )
-    return {"keys": keys_out}
+    return _paginate(keys_out, page, page_size)
+
+
+@admin_router.get("/admin/users")
+def admin_list_users(
+    _: bool = Depends(admin_required),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Admin endpoint to list all users (sanitized, paginated)."""
+    users = load_users().get("users", [])
+    output = [sanitize_user(u) for u in users]
+    return _paginate(output, page, page_size)
