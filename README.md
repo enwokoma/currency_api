@@ -36,6 +36,19 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
 
 ---
 
+## Architecture
+
+The application now follows a service-oriented layout for clarity:
+
+- `services/`: pure business logic for authentication, billing, transactions, users, and rate fetching. Every helper that mutates JSON storage or talks to Paystack lives here.
+- `routers/`: FastAPI routers grouped by domain (`auth`, `billing`, `users`, `admin`) plus `core` for the currency endpoints. Each router imports the relevant service functions.
+- `dependencies.py`, `billing_helpers.py`, `admin_utils.py`: shared dependencies/utilities consumed by the routers.
+- `main.py`: limited to FastAPI bootstrap (app config, middleware, public/protected docs endpoints) and router inclusion.
+
+This separation keeps route handlers slim while making it easy to locate the underlying business rules or reuse them in other contexts (CLI jobs, tests, etc.).
+
+---
+
 ## Usage Map (concise)
 
 - **Users**: `POST /auth/register` -> `POST /auth/verify-email` (OTP OR token, never both) or `GET /auth/verify-email?email=...&token=...` -> `POST /auth/login` (stores session token in `X-SESSION-TOKEN`).

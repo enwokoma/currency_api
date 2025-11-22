@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from auth import (
+from services.auth_service import (
     generate_api_key,
     generate_free_key,
     hash_key,
@@ -36,12 +36,12 @@ from schemas import (
     RevokeSelfPayload,
 )
 from time_utils import to_wat_iso
-from transactions import (
+from services.transaction_service import (
     get_transactions_for_key,
     load_transactions,
 )
 from usage_stats import get_usage_map
-from users import authenticate_user, sanitize_user
+from services.user_service import authenticate_user, sanitize_user
 
 user_router = APIRouter()
 
@@ -135,13 +135,22 @@ def _rotate_key_record(record: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
 
 
 def _claim_keys_for_user(user_id: str, email: str) -> None:
-    """Reassign legacy keys owned by email to the newly registered user id."""
+    """Reassign legacy/public keys created with the user's email to the user id.
+
+    Earlier flows created keys with an arbitrary ``owner`` tag (e.g., "public-user")
+    instead of the authenticated user's id. When a user later signs in with that
+    email, migrate any matching keys so they appear under their account.
+    """
     data = load_keys()
     modified = False
     for record in data.get("keys", []):
-        if record.get("owner") == email and record.get("email") == email:
-            record["owner"] = user_id
-            modified = True
+        if (record.get("email") or "").strip().lower() != email:
+            continue
+        # Already claimed
+        if record.get("owner") == user_id:
+            continue
+        record["owner"] = user_id
+        modified = True
     if modified:
         save_keys(data)
 
@@ -351,7 +360,7 @@ def get_usage(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]
             per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
             per_day = DEFAULT_PAID_REQUESTS_PER_DAY
     now = time.time()
-    from auth import load_keys, save_keys
+    from services.auth_service import load_keys, save_keys
 
     data = load_keys()
     credits = None

@@ -6,13 +6,13 @@ from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, Request
 
-from auth import (
+from services.auth_service import (
     validate_api_key,
     load_keys,
     mark_pending_plan,
     hash_key,
 )
-from billing import initialize_transaction
+from services.billing_service import initialize_transaction
 from config import (
     PLANS,
     DEFAULT_PAID_REQUESTS_PER_DAY,
@@ -20,7 +20,7 @@ from config import (
     FREE_REQUESTS_PER_DAY,
     FREE_REQUESTS_PER_MINUTE,
 )
-from transactions import record_transaction
+from services.transaction_service import record_transaction
 
 
 def _normalize_contact_fields(email: str, first_name: str, last_name: str) -> tuple[str, str, str]:

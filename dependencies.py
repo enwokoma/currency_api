@@ -9,7 +9,7 @@ from typing import Dict, Any
 from fastapi import Depends, HTTPException, Request
 
 from admin_utils import get_expected_admin_token
-from auth import (
+from services.auth_service import (
     validate_api_key,
     charge_call_for_key,
 )
@@ -20,7 +20,7 @@ from config import (
 )
 from rate_limit import allow_request
 from usage_stats import record_usage_event
-from users import get_user_by_session
+from services.user_service import get_user_by_session
 
 
 def api_key_required(request: Request) -> Dict[str, Any]:

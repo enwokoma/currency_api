@@ -6,14 +6,14 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import (
+from services.auth_service import (
     generate_api_key,
     revoke_api_key,
     restore_api_key,
     load_keys,
     upgrade_key_tier_by_hash,
 )
-from billing import verify_transaction_reference
+from services.billing_service import verify_transaction_reference
 from config import FREE_TIER_MONTHLY_CREDITS, PLANS
 from dependencies import admin_required
 from schemas import (
@@ -23,13 +23,13 @@ from schemas import (
     RestorePayload,
 )
 from time_utils import to_wat_iso
-from transactions import (
+from services.transaction_service import (
     find_transaction_by_reference,
     load_transactions,
     update_transaction_by_reference,
     update_transactions_for_key,
 )
-from users import load_users, save_users, sanitize_user
+from services.user_service import load_users, save_users, sanitize_user
 
 admin_router = APIRouter(tags=["Admin"])
 

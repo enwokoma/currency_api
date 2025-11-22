@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from auth import (
+from services.auth_service import (
     find_key_by_email,
     generate_api_key,
+    load_keys,
     update_key_contact,
     upgrade_key_tier_by_hash,
 )
-from billing import disable_subscription
+from services.billing_service import (
+    disable_subscription,
+    extract_webhook_info,
+    verify_paystack_signature,
+)
 from billing_helpers import (
     _get_plan_or_error,
     _normalize_contact_fields,
@@ -21,12 +26,13 @@ from billing_helpers import (
 )
 from billing_schemas import SubscribePayload, UpgradePayload
 from config import PLANS, FREE_TIER_MONTHLY_CREDITS
-from transactions import (
+from services.transaction_service import (
     get_latest_transaction_for_key,
     get_pending_transaction_for_key,
     has_valid_authorization_url,
     update_transactions_for_key,
 )
+from webhook_logs import log_webhook_event
 
 billing_router = APIRouter(tags=["Billing"])
 
@@ -189,3 +195,51 @@ def cancel_subscription(
         "status": "ok",
         "message": "Subscription has been cancelled. The key has been downgraded to free tier.",
     }
+
+
+@billing_router.post("/paystack/webhook", status_code=status.HTTP_200_OK, tags=["Billing"])
+async def paystack_webhook(request: Request) -> Dict[str, str]:
+    """Handle Paystack webhook events for subscription management."""
+    body = await request.body()
+    log_webhook_event(body)
+    signature = request.headers.get("x-paystack-signature")
+    if not verify_paystack_signature(body, signature):
+        raise HTTPException(status_code=400, detail="Invalid Paystack signature")
+    event_type, api_key_hash, plan_code, info = extract_webhook_info(body)
+    subscription_code = info.get("subscription_code")
+    email_token = info.get("email_token")
+    if event_type in ("charge.success", "subscription.create", "subscription.enable"):
+        if api_key_hash and plan_code:
+            plan = next((p for p in PLANS if p["code"] == plan_code), None)
+            if plan:
+                record = next(
+                    (k for k in load_keys().get("keys", []) if k.get("key_hash") == api_key_hash),
+                    None,
+                )
+                if record and record.get("revoked_at"):
+                    update_transactions_for_key(api_key_hash, new_status="failed")
+                else:
+                    upgrade_key_tier_by_hash(
+                        key_hash=api_key_hash,
+                        new_tier="paid",
+                        plan=plan,
+                        free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+                        paystack_subscription_code=subscription_code,
+                        paystack_email_token=email_token,
+                        subscription_status="active",
+                        active=True,
+                    )
+                    update_transactions_for_key(api_key_hash, new_status="success")
+    if event_type in ("subscription.disable", "invoice.failed", "invoice.create_failed"):
+        if api_key_hash:
+            status_str = "cancelled" if event_type == "subscription.disable" else "failed"
+            upgrade_key_tier_by_hash(
+                key_hash=api_key_hash,
+                new_tier="free",
+                plan=None,
+                free_monthly_credits=FREE_TIER_MONTHLY_CREDITS,
+                subscription_status="canceled",
+                active=True,
+            )
+            update_transactions_for_key(api_key_hash, new_status=status_str)
+    return {"status": "ok"}

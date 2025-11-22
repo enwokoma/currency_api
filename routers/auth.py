@@ -6,9 +6,9 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Query
 
-from auth import generate_free_key, find_key_by_email
+from services.auth_service import generate_free_key, find_key_by_email
 from schemas import FreeKeyPayload, RegisterPayload, VerifyEmailPayload, LoginPayload
-from users import (
+from services.user_service import (
     create_user,
     start_verification,
     verify_user,
