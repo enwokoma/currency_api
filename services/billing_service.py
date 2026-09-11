@@ -146,13 +146,16 @@ def verify_paystack_signature(body: bytes, signature: Optional[str]) -> bool:
     Returns:
         True if the signature matches the computed HMAC, False otherwise.
     """
-    if not get_paystack_key() or not signature:
+    # Read the secret directly: an unset secret must fail verification,
+    # not raise and turn the webhook into a 500.
+    secret = os.getenv("PAYSTACK_SECRET_KEY")
+    if not secret or not signature:
         return False
     computed = hmac.new(
-        get_paystack_key().encode("utf-8"), msg=body, digestmod=hashlib.sha512
+        secret.encode("utf-8"), msg=body, digestmod=hashlib.sha512
     ).hexdigest()
-    # Normalise case and compare in constant time
-    return hmac.compare_digest(computed, signature)
+    # Compare in constant time
+    return hmac.compare_digest(computed, signature.strip().lower())
 
 
 def verify_transaction_reference(reference: str) -> Dict[str, Any]:
