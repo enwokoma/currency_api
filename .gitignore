@@ -7,3 +7,7 @@
 /usage.json
 /users.json
 /webhook_logs.json
+# Python bytecode and virtualenv
+__pycache__/
+*.pyc
+.venv/
