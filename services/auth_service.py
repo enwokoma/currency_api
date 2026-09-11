@@ -331,11 +331,13 @@ def validate_api_key(
                 record["first_name"] = None
             if "last_name" not in record:
                 record["last_name"] = None
-            # Enforce paid subscription state unless explicitly permitted
+            # Enforce paid subscription state unless explicitly permitted. A paid
+            # key whose subscription is active may legitimately have no plan:
+            # admin-issued keys run on the default paid limits with unlimited
+            # credits (see config.DEFAULT_PAID_* and charge_call_for_key).
             if record["tier"] == "paid":
                 subscription_status = record.get("subscription_status")
-                has_plan = record.get("plan_code") is not None
-                if (subscription_status != "active" or not has_plan) and not allow_unpaid:
+                if subscription_status != "active" and not allow_unpaid:
                     raise HTTPException(
                         status_code=402,
                         detail="Paid subscription required to use this key. Complete billing to activate.",

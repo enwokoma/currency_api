@@ -237,7 +237,15 @@ def test_forbidden_historical_call_is_not_charged(client):
     assert rate_call(client, key).status_code == 200, "no rate-limit slots were consumed by the refusals"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: admin-generated paid keys without a plan get 402 although config/docs promise default paid limits for them")
-def test_admin_key_without_plan_is_usable(client):
+def test_admin_key_without_plan_runs_on_default_paid_limits(client):
     key = admin_key(client, "noplan", "noplan@example.com")
     assert rate_call(client, key).status_code == 200
+    r = client.post("/rate/historical", headers={"X-API-KEY": key}, json={"from_currency": "USD", "to_currency": "NGN", "date": "2024-12-31"})
+    assert r.status_code == 200, "a plan-less paid key is still a paid key"
+    u = usage(client, key)
+    assert u["rate_limits"] == {"per_minute": 100, "per_day": 10000}
+    assert u["remaining_credits"] is None and u["billable_requests"] == 0, "no plan means unlimited credits"
+    assert u["total_requests"] == 3
+
+    pending = admin_key(client, "later", "later@example.com", activate=False)
+    assert rate_call(client, pending).status_code == 402, "an inactive/pending paid key is still refused"
