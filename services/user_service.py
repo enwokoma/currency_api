@@ -10,8 +10,6 @@ call from FastAPI endpoints.
 
 from __future__ import annotations
 
-import json
-import os
 import secrets
 import time
 import uuid
@@ -19,6 +17,7 @@ import hashlib
 from typing import Dict, Any, Optional, Tuple
 
 from fastapi import HTTPException, status
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file
 
 
 USERS_FILE = "users.json"
@@ -32,19 +31,15 @@ SESSION_TTL_SECONDS = 24 * 60 * 60
 
 def _ensure_file(path: str, root_key: str) -> None:
     """Ensure a JSON file exists with the given root key."""
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump({root_key: []}, fh, indent=2)
+    ensure_json_file(path, root_key)
 
 
-def _load_json(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+def _load_json(path: str, root_key: str) -> Dict[str, Any]:
+    return load_json_file(path, root_key)
 
 
 def _save_json(path: str, data: Dict[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+    atomic_write_json(path, data)
 
 
 def _now_iso() -> str:
@@ -72,7 +67,7 @@ def _generate_verification_bundle() -> Dict[str, Any]:
 
 def load_users() -> Dict[str, Any]:
     _ensure_file(USERS_FILE, "users")
-    return _load_json(USERS_FILE)
+    return _load_json(USERS_FILE, "users")
 
 
 def save_users(data: Dict[str, Any]) -> None:
@@ -81,7 +76,7 @@ def save_users(data: Dict[str, Any]) -> None:
 
 def load_sessions() -> Dict[str, Any]:
     _ensure_file(SESSIONS_FILE, "sessions")
-    return _load_json(SESSIONS_FILE)
+    return _load_json(SESSIONS_FILE, "sessions")
 
 
 def save_sessions(data: Dict[str, Any]) -> None:

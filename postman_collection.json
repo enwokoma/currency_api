@@ -117,21 +117,36 @@
           "response": []
         },
         {
-          "name": "List My Transactions",
+          "name": "Verify Billing Transaction",
           "request": {
-            "name": "List My Transactions",
-            "method": "GET",
-            "header": [],
+            "name": "Verify Billing Transaction",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{base_url}}/transactions",
+              "raw": "{{base_url}}/billing/verify",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
-                "transactions"
+                "billing",
+                "verify"
               ]
             },
-            "description": "Return the transaction history for the calling user's API key."
+            "description": "Verify a Paystack transaction reference and apply the upgrade.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         },
@@ -152,6 +167,45 @@
               ]
             },
             "description": "Handle Paystack webhook events for subscription management."
+          },
+          "response": []
+        },
+        {
+          "name": "Paystack Webhook",
+          "request": {
+            "name": "Paystack Webhook",
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/paystack/webhook",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "paystack",
+                "webhook"
+              ]
+            },
+            "description": "Handle Paystack webhook events for subscription management."
+          },
+          "response": []
+        },
+        {
+          "name": "List My Transactions",
+          "request": {
+            "name": "List My Transactions",
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/transactions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "transactions"
+              ]
+            },
+            "description": "Return the transaction history for the calling user's API key."
           },
           "response": []
         }
@@ -238,7 +292,12 @@
           "request": {
             "name": "Resend Verification",
             "method": "POST",
-            "header": [],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{base_url}}/auth/resend-verification",
               "host": [
@@ -247,16 +306,18 @@
               "path": [
                 "auth",
                 "resend-verification"
-              ],
-              "query": [
-                {
-                  "key": "email",
-                  "value": "",
-                  "description": ""
-                }
               ]
             },
-            "description": "Resend the verification code/link for an unverified user."
+            "description": "Resend the verification code/link for an unverified user.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         },
@@ -652,7 +713,7 @@
                 "health"
               ]
             },
-            "description": "Health check endpoint (no authentication required)."
+            "description": "Basic health check."
           },
           "response": []
         }
@@ -678,6 +739,212 @@
               ]
             },
             "description": "Return remaining credits and rate limits for the caller's API key."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Core",
+      "item": [
+        {
+          "name": "Get All Rates",
+          "request": {
+            "name": "Get All Rates",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rates",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rates"
+              ]
+            },
+            "description": "Return all current rates for a base currency.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Rate",
+          "request": {
+            "name": "Get Rate",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rate"
+              ]
+            },
+            "description": "Retrieve the conversion rate for one currency pair.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Convert Currency",
+          "request": {
+            "name": "Convert Currency",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/convert",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "convert"
+              ]
+            },
+            "description": "Convert an amount from one currency to another.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Historical Rates Endpoint",
+          "request": {
+            "name": "Get Historical Rates Endpoint",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rates/historical",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rates",
+                "historical"
+              ]
+            },
+            "description": "Retrieve all rates for a base currency on a specific date.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Historical Rate",
+          "request": {
+            "name": "Get Historical Rate",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/rate/historical",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rate",
+                "historical"
+              ]
+            },
+            "description": "Retrieve a historical conversion rate between two currencies.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Convert Currency Historical",
+          "request": {
+            "name": "Convert Currency Historical",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/convert/historical",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "convert",
+                "historical"
+              ]
+            },
+            "description": "Convert an amount between two currencies on a specific date.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         }
@@ -947,212 +1214,6 @@
               ]
             },
             "description": "Admin endpoint to list all users (sanitized, paginated)."
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Core",
-      "item": [
-        {
-          "name": "Get All Rates",
-          "request": {
-            "name": "Get All Rates",
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/rates",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "rates"
-              ]
-            },
-            "description": "Return all current rates for a base currency.",
-            "body": {
-              "mode": "raw",
-              "raw": "",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Rate",
-          "request": {
-            "name": "Get Rate",
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/rate",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "rate"
-              ]
-            },
-            "description": "Retrieve the conversion rate from one currency to another.",
-            "body": {
-              "mode": "raw",
-              "raw": "",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Convert Currency",
-          "request": {
-            "name": "Convert Currency",
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/convert",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "convert"
-              ]
-            },
-            "description": "Convert an amount from one currency to another.",
-            "body": {
-              "mode": "raw",
-              "raw": "",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Historical Rates Endpoint",
-          "request": {
-            "name": "Get Historical Rates Endpoint",
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/rates/historical",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "rates",
-                "historical"
-              ]
-            },
-            "description": "Retrieve all rates for a base currency on a specific date (paid only).",
-            "body": {
-              "mode": "raw",
-              "raw": "",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Historical Rate",
-          "request": {
-            "name": "Get Historical Rate",
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/rate/historical",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "rate",
-                "historical"
-              ]
-            },
-            "description": "Retrieve a historical conversion rate between two currencies (paid only).",
-            "body": {
-              "mode": "raw",
-              "raw": "",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Convert Currency Historical",
-          "request": {
-            "name": "Convert Currency Historical",
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/convert/historical",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "convert",
-                "historical"
-              ]
-            },
-            "description": "Convert an amount between two currencies on a specific date (paid only).",
-            "body": {
-              "mode": "raw",
-              "raw": "",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
           },
           "response": []
         }

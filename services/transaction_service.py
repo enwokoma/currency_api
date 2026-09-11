@@ -36,11 +36,10 @@ based on webhook events, and filtering transactions by API key.
 
 from __future__ import annotations
 
-import json
-import os
 import time
 from typing import Dict, Any, List, Optional
 
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file
 
 AUTHORIZATION_URL_TTL_SECONDS = 2 * 60 * 60  # Paystack authorization URLs expire after 2 hours
 
@@ -53,9 +52,7 @@ TRANSACTIONS_FILE = "transactions.json"
 
 def _ensure_file() -> None:
     """Ensure the transaction file exists with the proper structure."""
-    if not os.path.exists(TRANSACTIONS_FILE):
-        with open(TRANSACTIONS_FILE, "w", encoding="utf-8") as fh:
-            json.dump({"transactions": []}, fh, indent=2)
+    ensure_json_file(TRANSACTIONS_FILE, "transactions")
 
 
 def load_transactions() -> Dict[str, Any]:
@@ -66,14 +63,12 @@ def load_transactions() -> Dict[str, Any]:
         is a list of transaction records.
     """
     _ensure_file()
-    with open(TRANSACTIONS_FILE, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    return load_json_file(TRANSACTIONS_FILE, "transactions")
 
 
 def save_transactions(data: Dict[str, Any]) -> None:
     """Persist the transactions JSON document to disk."""
-    with open(TRANSACTIONS_FILE, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+    atomic_write_json(TRANSACTIONS_FILE, data)
 
 
 def record_transaction(
@@ -105,6 +100,12 @@ def record_transaction(
         The created transaction record.
     """
     data = load_transactions()
+    existing = next(
+        (t for t in data.get("transactions", []) if t.get("reference") == reference),
+        None,
+    )
+    if existing:
+        return existing
     txn = {
         "reference": reference,
         "api_key_hash": api_key_hash,

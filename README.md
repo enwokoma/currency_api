@@ -60,6 +60,7 @@ This separation keeps route handlers slim while making it easy to locate the und
 - **Billing**:
   - Create paid key + checkout: `POST /billing/subscribe` (public).
   - Upgrade existing key: `POST /billing/upgrade` (uses caller's API key contact details).
+  - Verify transaction: `POST /billing/verify` (confirms Paystack reference and applies upgrade).
   - Cancel: `POST /billing/cancel` (paid key required).
   - Plans/transactions: `GET /plans`, `GET /transactions`, `GET /admin/transactions` (paginated).
   - Webhooks: `POST /paystack/webhook` (expects Paystack signature).
@@ -83,16 +84,6 @@ Full request/response samples for every endpoint live in `DOCS.md`.
   - List prefixes: `GET /user/keys`
   - Revoke: `POST /user/keys/revoke` (raw key) or `POST /user/keys/revoke-by-prefix`
   - Rotate: `POST /user/keys/regenerate` (raw key) or `POST /user/keys/regenerate-by-prefix` (returns new raw key)
-
----
-
-## Testing User Management System
-
-The user management smoke tests have been executed with the project virtual environment:
-
-```bash
-./.venv/Scripts/python.exe test_user_management.py
-```
 
 ---
 

@@ -13,7 +13,10 @@ from services.auth_service import (
     load_keys,
     upgrade_key_tier_by_hash,
 )
-from services.billing_service import verify_transaction_reference
+from services.billing_service import (
+    fetch_subscription_for_customer,
+    verify_transaction_reference,
+)
 from config import FREE_TIER_MONTHLY_CREDITS, PLANS
 from dependencies import admin_required
 from schemas import (
@@ -95,6 +98,16 @@ def reconcile_transaction(
         or subscription.get("code")
     )
     email_token = txn_data.get("email_token") or subscription.get("email_token")
+    if (not subscription_code or not email_token) and plan:
+        customer = txn_data.get("customer", {}) or {}
+        customer_id = customer.get("id")
+        if customer_id:
+            sub_code, token = fetch_subscription_for_customer(
+                customer_id,
+                plan.get("paystack_plan_code"),
+            )
+            subscription_code = subscription_code or sub_code
+            email_token = email_token or token
 
     upgrade_key_tier_by_hash(
         key_hash=api_key_hash,
@@ -239,18 +252,24 @@ def admin_list_keys(
     data = load_keys()
     keys_out = []
     for key in data.get("keys", []):
+        plan_code = key.get("plan_code")
+        plan = next((p for p in PLANS if p["code"] == plan_code), None) if plan_code else None
+        monthly_credits = plan["monthly_credits"] if plan else (FREE_TIER_MONTHLY_CREDITS if key.get("tier") == "free" else None)
+
         keys_out.append(
             {
                 "owner": key.get("owner"),
                 "active": key.get("active", True),
                 "revoked": bool(key.get("revoked_at")),
                 "tier": key.get("tier", "paid"),
-                "plan_code": key.get("plan_code"),
+                "plan_code": plan_code,
                 "pending_plan_code": key.get("pending_plan_code"),
                 "subscription_status": key.get("subscription_status"),
                 "email": key.get("email"),
                 "first_name": key.get("first_name"),
                 "last_name": key.get("last_name"),
+                "credits": key.get("credits"),
+                "credits_purchased": monthly_credits,
                 "paystack_subscription_code": key.get("paystack_subscription_code"),
                 "created_at": to_wat_iso(key.get("created_at")),
                 "upgraded_at": to_wat_iso(key.get("upgraded_at")),

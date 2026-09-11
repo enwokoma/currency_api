@@ -173,6 +173,53 @@ def verify_transaction_reference(reference: str) -> Dict[str, Any]:
     return data.get("data", {}) or {}
 
 
+def fetch_subscription_for_customer(
+    customer_id: int,
+    paystack_plan_code: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Fetch a customer's subscription details from Paystack (best effort)."""
+    url = f"{PAYSTACK_BASE_URL}/subscription?customer={customer_id}"
+    resp = requests.get(url, headers=_get_headers(), timeout=10)
+    try:
+        data = resp.json()
+    except Exception:
+        return None, None
+    if not resp.ok or not data.get("status"):
+        return None, None
+    subs = data.get("data", []) or []
+    if paystack_plan_code:
+        subs = [
+            s
+            for s in subs
+            if (s.get("plan") or {}).get("plan_code") == paystack_plan_code
+            or s.get("plan") == paystack_plan_code
+        ]
+    if not subs:
+        return None, None
+    active = next((s for s in subs if s.get("status") == "active"), None)
+    chosen = active or subs[0]
+    return chosen.get("subscription_code"), chosen.get("email_token")
+
+def verify_paystack_transaction(
+    reference: str,
+    expected_api_key_hash: Optional[str] = None,
+    expected_plan_code: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Verify a Paystack transaction and optionally validate metadata."""
+    txn_data = verify_transaction_reference(reference)
+    status_flag = txn_data.get("status")
+    if status_flag != "success":
+        raise HTTPException(status_code=400, detail="Transaction is not marked successful on Paystack")
+    metadata = txn_data.get("metadata", {}) or {}
+    meta_hash = metadata.get("api_key_hash")
+    meta_plan = metadata.get("plan_code") or metadata.get("plan")
+    if expected_api_key_hash and meta_hash != expected_api_key_hash:
+        raise HTTPException(status_code=400, detail="Paystack metadata does not match API key")
+    if expected_plan_code and meta_plan != expected_plan_code:
+        raise HTTPException(status_code=400, detail="Paystack metadata does not match plan")
+    return txn_data
+
+
 def extract_webhook_info(body: bytes) -> Tuple[str, Optional[str], Optional[str], Dict[str, Any]]:
     """Extract key information from a Paystack webhook payload.
 
@@ -196,7 +243,14 @@ def extract_webhook_info(body: bytes) -> Tuple[str, Optional[str], Optional[str]
     event_data = data.get("data", {}) or {}
     metadata = event_data.get("metadata", {}) or {}
     api_key_hash = metadata.get("api_key_hash")
-    plan_code = metadata.get("plan_code") or metadata.get("plan") or event_data.get("plan")
+    plan_code = (
+        metadata.get("plan_code")
+        or metadata.get("plan")
+        or event_data.get("plan_code")
+        or event_data.get("plan")
+    )
+    if isinstance(plan_code, dict):
+        plan_code = plan_code.get("plan_code") or plan_code.get("code") or plan_code.get("id")
 
     subscription = event_data.get("subscription", {}) or {}
     subscription_code = (

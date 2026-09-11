@@ -95,7 +95,7 @@ Use this form for “click-to-verify” links in future email integrations.
 **Response 200**
 ```json
 {
-  "message": "Verification OTP has been resent to your email.",
+  "message": "Verification code has been resent.",
   "verification": {
     "otp": "123456",
     "token": "new_verify_token",
@@ -202,23 +202,25 @@ Use this form for “click-to-verify” links in future email integrations.
 > On first login, any public key previously created with the user's email is automatically claimed so it appears in this list.
 **Response 200**
 ```json
-[
-  {
-    "api_key_prefix": "prefix1...",
-    "tier": "paid",
-    "plan_code": "PRO_MONTHLY",
-    "pending_plan_code": null,
-    "subscription_status": "active",
-    "contact": {
+{
+  "keys": [
+    {
+      "tier": "paid",
+      "active": true,
+      "revoked": false,
+      "plan_code": "PRO_MONTHLY",
+      "pending_plan_code": null,
+      "subscription_status": "active",
       "email": "paid.user@example.com",
       "first_name": "Paid",
-      "last_name": "User"
-    },
-    "created_at": "2025-01-01T12:00:00Z",
-    "upgraded_at": "2025-01-10T10:00:00Z",
-    "revoked_at": null
-  }
-]
+      "last_name": "User",
+      "created_at": "2025-01-01T12:00:00Z",
+      "upgraded_at": "2025-01-10T10:00:00Z",
+      "revoked_at": null,
+      "key_prefix": "prefix1..."
+    }
+  ]
+}
 ```
 
 ### Revoke my key (password-protected) - `POST /user/keys/revoke`
@@ -228,7 +230,7 @@ Use this form for “click-to-verify” links in future email integrations.
 ```
 **Response 200**
 ```json
-{ "message": "API key revoked successfully." }
+{ "status": "revoked", "message": "API key has been disabled." }
 ```
 
 ### Regenerate my key (password-protected) - `POST /user/keys/regenerate`
@@ -238,7 +240,18 @@ Use this form for “click-to-verify” links in future email integrations.
 ```
 **Response 200**
 ```json
-{ "message": "API key regenerated successfully.", "new_api_key": "<new_raw_api_key>" }
+{
+  "message": "API key rotated. Store the new key securely; the old key no longer works.",
+  "api_key": "<new_raw_api_key>",
+  "tier": "paid",
+  "plan_code": "PRO_MONTHLY",
+  "subscription_status": "active",
+  "contact": {
+    "email": "paid.user@example.com",
+    "first_name": "Paid",
+    "last_name": "User"
+  }
+}
 ```
 
 ### Revoke key by prefix (password-protected) - `POST /user/keys/revoke-by-prefix`
@@ -248,7 +261,7 @@ Use this form for “click-to-verify” links in future email integrations.
 ```
 **Response 200**
 ```json
-{ "message": "API key with prefix 'abcd1234' revoked successfully." }
+{ "status": "revoked", "key_prefix": "abcd1234..." }
 ```
 
 ### Regenerate key by prefix (password-protected) - `POST /user/keys/regenerate-by-prefix`
@@ -258,7 +271,19 @@ Use this form for “click-to-verify” links in future email integrations.
 ```
 **Response 200**
 ```json
-{ "message": "API key with prefix 'abcd1234' regenerated successfully.", "new_api_key": "<new_raw_api_key>" }
+{
+  "message": "API key rotated. Store the new key securely; the old key no longer works.",
+  "api_key": "<new_raw_api_key>",
+  "tier": "paid",
+  "plan_code": "PRO_MONTHLY",
+  "subscription_status": "active",
+  "key_prefix": "abcd1234...",
+  "contact": {
+    "email": "paid.user@example.com",
+    "first_name": "Paid",
+    "last_name": "User"
+  }
+}
 ```
 
 ### Admin generate key - `POST /admin/generate-key`
@@ -266,15 +291,15 @@ Use this form for “click-to-verify” links in future email integrations.
 **Response 200**
 ```json
 {
-  "tier": "paid",
+  "owner": "admin-owner",
   "api_key": "<generated_api_key>",
+  "plan_code": "PRO_MONTHLY",
   "contact": {
     "email": "admin.generated@example.com",
     "first_name": "Admin",
     "last_name": "User"
   },
-  "active": true,
-  "subscription_status": "active"
+  "active": true
 }
 ```
 ### Admin list users - `GET /admin/users`
@@ -319,19 +344,23 @@ Use this form for “click-to-verify” links in future email integrations.
 {
   "items": [
     {
-      "api_key_prefix": "prefix1...",
+      "owner": "owner-id",
+      "active": true,
+      "revoked": false,
       "tier": "paid",
       "plan_code": "PRO_MONTHLY",
+      "pending_plan_code": null,
       "subscription_status": "active",
-      "contact": {
-        "email": "paid.user@example.com",
-        "first_name": "Paid",
-        "last_name": "User"
-      },
+      "email": "paid.user@example.com",
+      "first_name": "Paid",
+      "last_name": "User",
+      "credits": 5000,
+      "credits_purchased": 5000,
+      "paystack_subscription_code": "sub_xxxxxxxx",
       "created_at": "2025-01-01T12:00:00Z",
       "upgraded_at": "2025-01-10T10:00:00Z",
       "revoked_at": null,
-      "paystack_subscription_code": "sub_xxxxxxxx"
+      "key_prefix": "prefix1..."
     }
   ],
   "page": 1,
@@ -428,8 +457,8 @@ Contact fields overwrite the stored contact (and remain unique).
 **Response 200**
 ```json
 {
-  "status": "cancelled",
-  "message": "Subscription cancelled and key downgraded to free."
+  "status": "ok",
+  "message": "Subscription has been cancelled. The key has been downgraded to free tier."
 }
 ```
 
@@ -437,17 +466,24 @@ Contact fields overwrite the stored contact (and remain unique).
 - `GET /transactions` - header `X-API-KEY: {{any_key}}` -> returns transactions for that key.
 **Response 200**
 ```json
-[
-  {
-    "transaction_id": "txn_xxxxxxxx",
-    "api_key_prefix": "prefix1...",
-    "plan_code": "PRO_MONTHLY",
-    "status": "success",
-    "amount": 5000,
-    "currency": "NGN",
-    "timestamp": "2025-01-10T10:00:00Z"
-  }
-]
+{
+  "transactions": [
+    {
+      "reference": "ref_abc123",
+      "api_key_hash": "hash...",
+      "email": "user@example.com",
+      "plan_code": "PRO_MONTHLY",
+      "paystack_plan_code": "PLN_xxx",
+      "amount_naira": 5000,
+      "status": "success",
+      "subscription_code": "SUB_xxx",
+      "email_token": "ETK_xxx",
+      "authorization_url": "https://checkout.paystack.com/...",
+      "created_at": 1700000000.0,
+      "updated_at": 1700000000.0
+    }
+  ]
+}
 ```
 - `GET /admin/transactions` - header `X-ADMIN-TOKEN` (query: `page`, `page_size`) -> returns all transactions, paginated.
 **Response 200**
@@ -455,13 +491,18 @@ Contact fields overwrite the stored contact (and remain unique).
 {
   "items": [
     {
-      "transaction_id": "txn_xxxxxxxx",
-      "api_key_prefix": "prefix1...",
+      "reference": "ref_abc123",
+      "api_key_hash": "hash...",
+      "email": "user@example.com",
       "plan_code": "PRO_MONTHLY",
+      "paystack_plan_code": "PLN_xxx",
       "status": "success",
-      "amount": 5000,
-      "currency": "NGN",
-      "timestamp": "2025-01-10T10:00:00Z"
+      "amount_naira": 5000,
+      "subscription_code": "SUB_xxx",
+      "email_token": "ETK_xxx",
+      "authorization_url": "https://checkout.paystack.com/...",
+      "created_at": 1700000000.0,
+      "updated_at": 1700000000.0
     }
   ],
   "page": 1,
@@ -479,6 +520,28 @@ Contact fields overwrite the stored contact (and remain unique).
 }
 ```
 - Configure your Paystack dashboard to point webhooks at `/paystack/webhook`. The handler verifies the signature using `PAYSTACK_SECRET_KEY`. All events are recorded in `transactions.json`; you can poll `GET /transactions` (per key) or `GET /admin/transactions` to monitor incoming notifications and statuses.
+
+### Verify Paystack transaction (client flow) - `POST /billing/verify`
+- Header: `X-API-KEY: {{paid_or_pending_key}}`
+- Body:
+```json
+{
+  "reference": "PS_ref_from_paystack_receipt"
+}
+```
+- What it does:
+  - Calls Paystack `/transaction/verify/{reference}` to confirm success.
+  - Applies the upgrade for the calling key (idempotent) and stores subscription identifiers.
+- **Response 200**
+```json
+{
+  "status": "verified",
+  "message": "Transaction verified and applied.",
+  "reference": "PS_ref_from_paystack_receipt",
+  "plan_code": "BASIC_MONTHLY",
+  "transaction": { "...": "updated transaction record" }
+}
+```
 
 ### Manual reconciliation (missed webhook) - `POST /admin/reconcile-transaction`
 - Header: `X-ADMIN-TOKEN: {{admin_token}}`
@@ -647,10 +710,11 @@ Contact fields overwrite the stored contact (and remain unique).
 ```
 **Response 200**
 ```json
-[
-  {
-    "api_key_prefix": "prefix1...",
-    "usage": {
+{
+  "usage": [
+    {
+      "owner": "user-id",
+      "email": "paid.user@example.com",
       "tier": "paid",
       "subscription_status": "active",
       "remaining_credits": 9988,
@@ -660,12 +724,12 @@ Contact fields overwrite the stored contact (and remain unique).
         "per_minute": 500,
         "per_day": 5000
       },
-      "last_request_at": "2025-11-16T17:30:10.123"
-    }
-  },
-  {
-    "api_key_prefix": "prefix2...",
-    "usage": {
+      "last_request_at": "2025-11-16T17:30:10.123",
+      "key_prefix": "prefix1..."
+    },
+    {
+      "owner": "user-id",
+      "email": "free.user@example.com",
       "tier": "free",
       "subscription_status": "free",
       "remaining_credits": 188,
@@ -675,45 +739,43 @@ Contact fields overwrite the stored contact (and remain unique).
         "per_minute": 10,
         "per_day": 200
       },
-      "last_request_at": "2025-11-16T17:30:10.123"
+      "last_request_at": "2025-11-16T17:30:10.123",
+      "key_prefix": "prefix2..."
     }
-  }
-]
+  ]
+}
 ```
 **Response 200**
 ```json
-[
-  {
-    "api_key_prefix": "prefix1...",
-    "owner_contact": "paid.user@example.com",
-    "usage": {
+{
+  "items": [
+    {
+      "owner": "user-id",
+      "email": "paid.user@example.com",
       "tier": "paid",
+      "plan_code": "PRO_MONTHLY",
       "subscription_status": "active",
-      "remaining_credits": 9988,
       "total_requests": 12,
       "billable_requests": 12,
-      "rate_limits": {
-        "per_minute": 500,
-        "per_day": 5000
-      },
-      "last_request_at": "2025-11-16T17:30:10.123"
-    }
-  },
-  {
-    "api_key_prefix": "prefix2...",
-    "owner_contact": "free.user@example.com",
-    "usage": {
+      "credits_used": 12,
+      "first_request_at": "2025-11-16T17:30:10.123",
+      "last_request_at": "2025-11-16T17:45:10.123"
+    },
+    {
+      "owner": "user-id",
+      "email": "free.user@example.com",
       "tier": "free",
+      "plan_code": null,
       "subscription_status": "free",
-      "remaining_credits": 188,
       "total_requests": 12,
       "billable_requests": 12,
-      "rate_limits": {
-        "per_minute": 10,
-        "per_day": 200
-      },
-      "last_request_at": "2025-11-16T17:30:10.123"
+      "credits_used": 12,
+      "first_request_at": "2025-11-16T17:30:10.123",
+      "last_request_at": "2025-11-16T17:45:10.123"
     }
-  }
-]
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 2
+}
 ```

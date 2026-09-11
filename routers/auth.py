@@ -7,7 +7,13 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Request, Query
 
 from services.auth_service import generate_free_key, find_key_by_email
-from schemas import FreeKeyPayload, RegisterPayload, VerifyEmailPayload, LoginPayload
+from schemas import (
+    FreeKeyPayload,
+    RegisterPayload,
+    ResendVerificationPayload,
+    VerifyEmailPayload,
+    LoginPayload,
+)
 from services.user_service import (
     create_user,
     start_verification,
@@ -68,9 +74,9 @@ def register_user(payload: RegisterPayload) -> Dict[str, Any]:
 
 
 @auth_router.post("/auth/resend-verification", tags=["User"])
-def resend_verification(email: str) -> Dict[str, Any]:
+def resend_verification(payload: ResendVerificationPayload) -> Dict[str, Any]:
     """Resend the verification code/link for an unverified user."""
-    verification = start_verification(email.strip().lower())
+    verification = start_verification(payload.email.strip().lower())
     return {
         "message": "Verification code has been resent.",
         "verification": {

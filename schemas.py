@@ -90,6 +90,12 @@ class VerifyEmailPayload(BaseModel):
     token: Optional[str] | None = None
 
 
+class ResendVerificationPayload(BaseModel):
+    """Payload for resending a verification code/link."""
+
+    email: str
+
+
 class LoginPayload(BaseModel):
     """Payload for user login."""
 

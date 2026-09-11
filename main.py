@@ -174,9 +174,7 @@ app.lifespan = lifespan
 async def openapi_json(_: Dict[str, Any] = Depends(api_key_required)) -> JSONResponse:
     """Serve the OpenAPI schema, protected by API key."""
     global _cached_openapi
-    try:
-        _cached_openapi  # type: ignore
-    except NameError:
+    if _cached_openapi is None:
         _cached_openapi = get_openapi(
             title=APP_TITLE,
             version=APP_VERSION,
@@ -207,16 +205,14 @@ async def swagger_docs(_: Dict[str, Any] = Depends(api_key_required)) -> HTMLRes
 async def public_openapi_json() -> JSONResponse:
     """Serve the OpenAPI schema without authentication."""
     global _public_openapi
-    try:
-        return JSONResponse(_public_openapi)  # type: ignore
-    except NameError:
+    if _public_openapi is None:
         _public_openapi = get_openapi(
             title=APP_TITLE,
             version=APP_VERSION,
             description=APP_DESCRIPTION,
             routes=app.routes,
         )
-        return JSONResponse(_public_openapi)
+    return JSONResponse(_public_openapi)
 
 
 @app.get("/public/docs", include_in_schema=False)

@@ -34,36 +34,27 @@ math; callers can convert to human-readable strings as needed.
 
 from __future__ import annotations
 
-import json
-import os
 import time
 from typing import Dict, Any
 
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file
 USAGE_FILE = "usage.json"
 
 
 def _ensure_file() -> None:
     """Create the usage file with an empty structure if missing."""
-    if not os.path.exists(USAGE_FILE):
-        with open(USAGE_FILE, "w", encoding="utf-8") as fh:
-            json.dump({"usage": []}, fh, indent=2)
+    ensure_json_file(USAGE_FILE, "usage")
 
 
 def load_usage() -> Dict[str, Any]:
     """Load the usage JSON document."""
     _ensure_file()
-    with open(USAGE_FILE, "r", encoding="utf-8") as fh:
-        try:
-            return json.load(fh)
-        except json.JSONDecodeError:
-            # Recover gracefully if the file exists but is empty/corrupt
-            return {"usage": []}
+    return load_json_file(USAGE_FILE, "usage")
 
 
 def save_usage(data: Dict[str, Any]) -> None:
     """Persist the usage JSON document."""
-    with open(USAGE_FILE, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+    atomic_write_json(USAGE_FILE, data)
 
 
 def get_usage_map() -> Dict[str, Dict[str, Any]]:

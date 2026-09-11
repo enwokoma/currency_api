@@ -46,7 +46,6 @@ revocation, tier upgrades/downgrades, and credit consumption.
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 import hashlib
@@ -55,6 +54,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import HTTPException
 
 from datetime import datetime, timezone, timedelta
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file
 
 # West Africa Time (UTC+1) timezone definition. Lagos does not observe DST.
 WAT = timezone(timedelta(hours=1))
@@ -79,29 +79,23 @@ KEY_FILE = "keys.json"
 SECONDS_PER_MONTH = 30 * 24 * 60 * 60
 
 # Ensure the key store exists
-if not os.path.exists(KEY_FILE):
-    with open(KEY_FILE, "w", encoding="utf-8") as fh:
-        json.dump({"keys": []}, fh, indent=2)
+ensure_json_file(KEY_FILE, "keys")
 
 
 def _ensure_key_file() -> None:
     """Create the key store file if it has been deleted."""
-    if not os.path.exists(KEY_FILE):
-        with open(KEY_FILE, "w", encoding="utf-8") as fh:
-            json.dump({"keys": []}, fh, indent=2)
+    ensure_json_file(KEY_FILE, "keys")
 
 
 def load_keys() -> Dict[str, Any]:
     """Load the keys JSON document from disk."""
     _ensure_key_file()
-    with open(KEY_FILE, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    return load_json_file(KEY_FILE, "keys")
 
 
 def save_keys(data: Dict[str, Any]) -> None:
     """Persist the keys JSON document to disk."""
-    with open(KEY_FILE, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+    atomic_write_json(KEY_FILE, data)
 
 
 def hash_key(raw_key: str) -> str:
@@ -499,6 +493,29 @@ def upgrade_key_tier_by_hash(
         save_keys(data)
         return record
     raise HTTPException(status_code=404, detail='Key not found for upgrade')
+
+
+def update_subscription_identifiers(
+    key_hash: str,
+    *,
+    paystack_subscription_code: str | None = None,
+    paystack_email_token: str | None = None,
+    subscription_status: str | None = None,
+) -> dict:
+    """Update Paystack subscription identifiers without touching credits."""
+    data = load_keys()
+    for record in data.get("keys", []):
+        if record.get("key_hash") != key_hash:
+            continue
+        if paystack_subscription_code is not None:
+            record["paystack_subscription_code"] = paystack_subscription_code
+        if paystack_email_token is not None:
+            record["paystack_email_token"] = paystack_email_token
+        if subscription_status is not None:
+            record["subscription_status"] = subscription_status
+        save_keys(data)
+        return record
+    raise HTTPException(status_code=404, detail="Key not found for subscription update")
 
 def charge_call_for_key(
     key_record: Dict[str, Any],
