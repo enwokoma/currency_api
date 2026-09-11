@@ -408,7 +408,13 @@ def rotate_api_key(raw_key: str) -> Tuple[str, Dict[str, Any]]:
 
 @synchronized
 def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> Dict[str, Any]:
-    """Reactivate a previously revoked or inactive key."""
+    """Reactivate a previously revoked or inactive key.
+
+    Revocation overwrites the subscription status with ``"revoked"``. When the
+    caller does not say which status to restore, infer a usable one from the
+    tier so the key actually works again: ``free`` for free keys and
+    ``active`` for paid keys. An explicit ``subscription_status`` always wins.
+    """
     hashed = hash_key(raw_key)
     data = load_keys()
     for record in data.get("keys", []):
@@ -416,6 +422,8 @@ def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> 
             record["active"] = True
             if subscription_status is not None:
                 record["subscription_status"] = subscription_status
+            elif record.get("subscription_status") == "revoked":
+                record["subscription_status"] = "free" if record.get("tier") == "free" else "active"
             record.pop("revoked_at", None)
             save_keys(data)
             record_copy = dict(record)

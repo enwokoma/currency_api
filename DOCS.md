@@ -367,6 +367,23 @@ Use this form for “click-to-verify” links in future email integrations.
 }
 ```
 
+### Admin unrevoke key - `POST /admin/unrevoke-key`
+- Headers: `X-ADMIN-TOKEN: {{admin_token}}`
+```json
+{ "api_key": "{{paid_api_key}}", "subscription_status": "active" }
+```
+- `subscription_status` is optional. When omitted, a revoked key is restored to a usable state: `free` for free keys, `active` for paid keys. Pass it explicitly (for example `pending`) to restore a different state.
+**Response 200**
+```json
+{
+  "status": "ok",
+  "message": "API key reactivated",
+  "active": true,
+  "subscription_status": "active",
+  "tier": "paid"
+}
+```
+
 ### Admin list keys - `GET /admin/keys`
 - Headers: `X-ADMIN-TOKEN`
 - Query: `page`, `page_size`

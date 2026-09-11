@@ -73,13 +73,21 @@ def test_revoke_and_unrevoke(client):
     assert rate_call(client, key).status_code == 200
     assert "revoked_at" not in key_record(key)
 
+    assert key_record(key)["subscription_status"] == "free", "a restored free key gets its free status back"
+
     paid = admin_key(client, "p", "p@example.com", plan_code="PRO_MONTHLY")
     client.post("/admin/revoke-key", headers=ADMIN, json={"api_key": paid})
-    client.post("/admin/unrevoke-key", headers=ADMIN, json={"api_key": paid})
-    assert rate_call(client, paid).status_code == 402, "a paid key restored without a status keeps status=revoked"
-    r = client.post("/admin/unrevoke-key", headers=ADMIN, json={"api_key": paid, "subscription_status": "active"})
+    assert rate_call(client, paid).status_code == 403
+    r = client.post("/admin/unrevoke-key", headers=ADMIN, json={"api_key": paid})
     assert r.status_code == 200 and r.json()["subscription_status"] == "active"
-    assert rate_call(client, paid).status_code == 200
+    assert rate_call(client, paid).status_code == 200, "a paid key restored without an explicit status is usable"
+    assert key_record(paid)["plan_code"] == "PRO_MONTHLY" and key_record(paid)["credits"] == 20000 - 1
+
+    client.post("/admin/revoke-key", headers=ADMIN, json={"api_key": paid})
+    r = client.post("/admin/unrevoke-key", headers=ADMIN, json={"api_key": paid, "subscription_status": "pending"})
+    assert r.status_code == 200 and r.json()["subscription_status"] == "pending"
+    assert rate_call(client, paid).status_code == 402, "an explicit status is honoured as given"
+    assert client.post("/admin/unrevoke-key", headers=ADMIN, json={"api_key": "free_missing"}).status_code == 404
 
 
 def test_admin_listings_and_pagination(client):
