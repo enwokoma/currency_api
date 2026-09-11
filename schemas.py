@@ -54,6 +54,12 @@ class ReconcileTransactionPayload(BaseModel):
     reference: str
 
 
+class ClaimKeyPayload(BaseModel):
+    """Attach a key created outside the account by presenting the raw key."""
+
+    api_key: str
+
+
 class CreateKeyPayload(BaseModel):
     """Payload for creating an API key for a user.
 

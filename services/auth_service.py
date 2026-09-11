@@ -420,6 +420,27 @@ def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> 
 
 
 @synchronized
+def claim_api_key(raw_key: str, user_id: str) -> Dict[str, Any]:
+    """Attach an existing key to a user account.
+
+    Possession of the raw key is the proof of ownership, so this never
+    matches on email. Idempotent when the key already belongs to the user.
+    """
+    hashed = hash_key(raw_key)
+    data = load_keys()
+    for record in data.get("keys", []):
+        if record.get("key_hash") != hashed:
+            continue
+        if record.get("owner") != user_id:
+            record["owner"] = user_id
+            save_keys(data)
+        record_copy = dict(record)
+        record_copy["key_hash"] = hashed
+        return record_copy
+    raise HTTPException(status_code=404, detail="API key not found")
+
+
+@synchronized
 def upgrade_key_tier_by_hash(
     key_hash: str,
     new_tier: str,

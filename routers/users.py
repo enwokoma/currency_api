@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from services.auth_service import (
+    claim_api_key,
     generate_api_key,
     generate_free_key,
     hash_key,
@@ -28,6 +29,7 @@ from config import (
 )
 from dependencies import api_key_required, session_required
 from schemas import (
+    ClaimKeyPayload,
     CreateKeyPayload,
     FreeKeyPayload,
     RegenerateByPrefixPayload,
@@ -42,7 +44,7 @@ from services.transaction_service import (
     load_transactions,
 )
 from usage_stats import get_usage_map
-from services.user_service import authenticate_user, sanitize_user
+from services.user_service import authenticate_user, load_users, sanitize_user
 
 user_router = APIRouter()
 
@@ -137,26 +139,11 @@ def _rotate_key_record(record: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     raise HTTPException(status_code=404, detail="API key not found")
 
 
-@synchronized
-def _claim_keys_for_user(user_id: str, email: str) -> None:
-    """Reassign legacy/public keys created with the user's email to the user id.
-
-    Earlier flows created keys with an arbitrary ``owner`` tag (e.g., "public-user")
-    instead of the authenticated user's id. When a user later signs in with that
-    email, migrate any matching keys so they appear under their account.
-    """
-    data = load_keys()
-    modified = False
-    for record in data.get("keys", []):
-        if (record.get("email") or "").strip().lower() != email:
-            continue
-        # Already claimed
-        if record.get("owner") == user_id:
-            continue
-        record["owner"] = user_id
-        modified = True
-    if modified:
-        save_keys(data)
+def _is_registered_user_id(owner: str | None) -> bool:
+    """True when ``owner`` is the id of a registered user account."""
+    if not owner:
+        return False
+    return any(u.get("id") == owner for u in load_users().get("users", []))
 
 
 @user_router.get("/user", tags=["User"])
@@ -287,10 +274,48 @@ def regenerate_my_key_by_prefix(
     }
 
 
+@user_router.post("/user/keys/claim", tags=["User"])
+def claim_key(
+    payload: ClaimKeyPayload,
+    user: Dict[str, Any] = Depends(session_required),
+) -> Dict[str, Any]:
+    """Attach a key created outside this account (public free key or subscribe).
+
+    Possession of the raw key is the proof of ownership. Keys are never
+    reassigned by email match: email verification currently returns the
+    code in the API response, so an email match proves nothing.
+    """
+    hashed = hash_key(payload.api_key)
+    current = next(
+        (r for r in load_keys().get("keys", []) if r.get("key_hash") == hashed),
+        None,
+    )
+    if not current:
+        raise HTTPException(status_code=404, detail="API key not found")
+    owner = current.get("owner")
+    if owner != user["id"] and _is_registered_user_id(owner):
+        raise HTTPException(
+            status_code=409,
+            detail="This key is already attached to another account.",
+        )
+    record = claim_api_key(payload.api_key, user["id"])
+    return {
+        "status": "claimed",
+        "key_prefix": (record.get("key_hash") or "")[:8] + ".",
+        "tier": record.get("tier"),
+        "plan_code": record.get("plan_code"),
+        "subscription_status": record.get("subscription_status"),
+        "contact": {
+            "email": record.get("email"),
+            "first_name": record.get("first_name"),
+            "last_name": record.get("last_name"),
+        },
+    }
+
+
 @user_router.get("/user/keys", tags=["User"])
 def list_user_keys(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
     """List all API keys owned by the current user."""
-    _claim_keys_for_user(user["id"], user.get("email", "").lower())
     data = load_keys()
     owned = []
     for record in data.get("keys", []):
@@ -327,7 +352,6 @@ def usage_snapshot(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str,
 @user_router.get("/user/usage", tags=["User"])
 def list_user_usage(user: Dict[str, Any] = Depends(session_required)) -> Dict[str, Any]:
     """Return usage details for all keys owned by the session user."""
-    _claim_keys_for_user(user["id"], user.get("email", "").lower())
     data = load_keys()
     usage_map = get_usage_map()
     summaries = []

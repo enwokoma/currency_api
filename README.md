@@ -56,7 +56,8 @@ This separation keeps route handlers slim while making it easy to locate the und
   - Public: `POST /auth/free-key` (free tier). Email uniqueness is enforced globally—once an email owns a key (free or paid), additional calls will return 400.
   - Authenticated: `POST /auth/create-key` with `tier` = `free` or `paid` (paid keys remain inactive with `subscription_status=pending` until upgraded via billing).
   - Admin: `POST /admin/generate-key` (paid, optional plan), `POST /admin/revoke-key`.
-  - Listing: `GET /user/keys` (auto-claims any public key created with the user's email), `GET /admin/keys` (paginated). Admins can also fetch every registered user via `GET /admin/users`.
+  - Listing: `GET /user/keys`, `GET /admin/keys` (paginated). Admins can also fetch every registered user via `GET /admin/users`.
+  - Claiming: `POST /user/keys/claim` attaches a key created outside the account (public free key or `/billing/subscribe`) by presenting the raw key. Keys are never reassigned by email match.
 - **Billing**:
   - Create paid key + checkout: `POST /billing/subscribe` (public).
   - Upgrade existing key: `POST /billing/upgrade` (uses caller's API key contact details).
@@ -80,7 +81,7 @@ Full request/response samples for every endpoint live in `DOCS.md`.
   - `base_url` (e.g., `http://localhost:8000`)
   - `admin_token`, `session_token`, `free_api_key`, `paid_api_key`, `plan_code`
   - Optional: `user_first_name`, `user_last_name`, `user_email`, `user_password` (default bodies use these). Override contact with `contact_email`, `contact_first_name`, `contact_last_name` only if you want a different billing contact.
-- Lost key recovery (session + password required):
+- Lost key recovery (session + password required; the key must already be attached to the account via `/auth/create-key` or `/user/keys/claim`):
   - List prefixes: `GET /user/keys`
   - Revoke: `POST /user/keys/revoke` (raw key) or `POST /user/keys/revoke-by-prefix`
   - Rotate: `POST /user/keys/regenerate` (raw key) or `POST /user/keys/regenerate-by-prefix` (returns new raw key)

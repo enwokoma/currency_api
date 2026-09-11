@@ -635,6 +635,41 @@
           "response": []
         },
         {
+          "name": "Claim Key",
+          "request": {
+            "name": "Claim Key",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/user/keys/claim",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "user",
+                "keys",
+                "claim"
+              ]
+            },
+            "description": "Attach a key created outside this account (public free key or subscribe).\n\nPossession of the raw key is the proof of ownership. Keys are never\nreassigned by email match: email verification currently returns the\ncode in the API response, so an email match proves nothing.",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
           "name": "List User Keys",
           "request": {
             "name": "List User Keys",

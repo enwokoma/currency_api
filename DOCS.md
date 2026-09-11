@@ -197,9 +197,28 @@ Use this form for “click-to-verify” links in future email integrations.
 }
 ```
 
+### Claim a key - `POST /user/keys/claim`
+- Header: `X-SESSION-TOKEN: {{session_token}}`
+- Attaches a key that was created outside the account (via `/auth/free-key` or `/billing/subscribe`). Possession of the raw key is the proof of ownership; keys are never reassigned by email match.
+```json
+{ "api_key": "<raw_api_key>" }
+```
+**Response 200**
+```json
+{
+  "status": "claimed",
+  "key_prefix": "abcd1234.",
+  "tier": "free",
+  "plan_code": null,
+  "subscription_status": "free",
+  "contact": { "email": "free.user@example.com", "first_name": "Free", "last_name": "User" }
+}
+```
+> Returns 404 for an unknown key and 409 if the key is already attached to a different registered account. Claiming a key you already own is a no-op.
+
 ### List user keys - `GET /user/keys`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
-> On first login, any public key previously created with the user's email is automatically claimed so it appears in this list.
+> Only keys attached to the account are listed: those created with `/auth/create-key` or attached with `/user/keys/claim`.
 **Response 200**
 ```json
 {
