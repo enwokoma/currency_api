@@ -755,31 +755,6 @@
       ]
     },
     {
-      "name": "Usage",
-      "item": [
-        {
-          "name": "Get Usage",
-          "request": {
-            "name": "Get Usage",
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/me/usage",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "me",
-                "usage"
-              ]
-            },
-            "description": "Return remaining credits and rate limits for the caller's API key."
-          },
-          "response": []
-        }
-      ]
-    },
-    {
       "name": "Core",
       "item": [
         {

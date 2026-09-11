@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -19,19 +19,10 @@ from services.auth_service import (
     save_keys,
 )
 from billing_helpers import _normalize_contact_fields, _rate_limits_for_record
-from config import (
-    DEFAULT_PAID_REQUESTS_PER_DAY,
-    DEFAULT_PAID_REQUESTS_PER_MINUTE,
-    FREE_REQUESTS_PER_DAY,
-    FREE_REQUESTS_PER_MINUTE,
-    FREE_TIER_MONTHLY_CREDITS,
-    PLANS,
-)
 from dependencies import api_key_required, session_required
 from schemas import (
     ClaimKeyPayload,
     CreateKeyPayload,
-    FreeKeyPayload,
     RegenerateByPrefixPayload,
     RegenerateKeyPayload,
     RevokeByPrefixPayload,
@@ -39,10 +30,7 @@ from schemas import (
 )
 from storage_utils import synchronized
 from time_utils import to_wat_iso
-from services.transaction_service import (
-    get_transactions_for_key,
-    load_transactions,
-)
+from services.transaction_service import get_transactions_for_key
 from usage_stats import get_usage_map
 from services.user_service import authenticate_user, load_users, sanitize_user
 
@@ -362,63 +350,6 @@ def list_user_usage(user: Dict[str, Any] = Depends(session_required)) -> Dict[st
         tracked = usage_map.get(record.get("key_hash"), {}) or {}
         summaries.append(_compose_usage_entry(record, tracked, per_minute, per_day))
     return {"usage": summaries}
-
-
-@user_router.get("/me/usage", tags=["Usage"])
-def get_usage(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]:
-    """Return remaining credits and rate limits for the caller's API key."""
-    tier = key.get("tier", "paid")
-    plan_code = key.get("plan_code")
-    if tier == "free":
-        per_minute = FREE_REQUESTS_PER_MINUTE
-        per_day = FREE_REQUESTS_PER_DAY
-        plan_info: Optional[Dict[str, Any]] = None
-    else:
-        if plan_code:
-            plan_info = next((p for p in PLANS if p["code"] == plan_code), None)
-            if plan_info:
-                per_minute = plan_info.get("requests_per_minute", DEFAULT_PAID_REQUESTS_PER_MINUTE)
-                per_day = plan_info.get("requests_per_day", DEFAULT_PAID_REQUESTS_PER_DAY)
-            else:
-                plan_info = None
-                per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-                per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-        else:
-            plan_info = None
-            per_minute = DEFAULT_PAID_REQUESTS_PER_MINUTE
-            per_day = DEFAULT_PAID_REQUESTS_PER_DAY
-    now = time.time()
-    from services.auth_service import load_keys, save_keys
-
-    data = load_keys()
-    credits = None
-    next_reset = None
-    for record in data.get("keys", []):
-        if record.get("key_hash") == key["key_hash"]:
-            credits = record.get("credits")
-            next_reset = record.get("credits_reset_at")
-            if next_reset and now > next_reset:
-                if record.get("tier") == "free":
-                    credits = FREE_TIER_MONTHLY_CREDITS
-                else:
-                    plan_credits = None
-                    if plan_info:
-                        plan_credits = plan_info.get("monthly_credits")
-                    credits = plan_credits
-                record["credits"] = credits
-                record["credits_reset_at"] = now + 30 * 24 * 3600
-                next_reset = record["credits_reset_at"]
-                save_keys(data)
-            break
-    return {
-        "remaining_credits": credits,
-        "credits_reset_at": next_reset,
-        "credits_reset_at_wat": to_wat_iso(next_reset),
-        "rate_limits": {"per_minute": per_minute, "per_day": per_day},
-        "plan": plan_info,
-        "tier": tier,
-        "plan_code": plan_code,
-    }
 
 
 @user_router.get("/transactions", tags=["Billing"])
