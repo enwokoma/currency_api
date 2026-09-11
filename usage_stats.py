@@ -37,7 +37,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Any
 
-from storage_utils import atomic_write_json, ensure_json_file, load_json_file
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 USAGE_FILE = "usage.json"
 
 
@@ -67,6 +67,7 @@ def get_usage_map() -> Dict[str, Dict[str, Any]]:
     }
 
 
+@synchronized
 def record_usage_event(
     *,
     key_hash: str,

@@ -5,8 +5,35 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
-from typing import Any, Dict
+from functools import wraps
+from typing import Any, Callable, Dict, TypeVar
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+# Every store is mutated with a load -> modify -> save cycle. Sync route
+# handlers run concurrently in a threadpool, so two requests for the same key
+# could read the same balance and each write it back minus one, losing a
+# decrement. A single process-wide re-entrant lock serialises those cycles:
+# the primitives below take it for every read and write, and ``synchronized``
+# wraps whole read-modify-write functions. It is re-entrant so a locked
+# function may call another locked function. Reads must hold it too because
+# on Windows ``os.replace`` fails while another thread has the file open.
+#
+# Note: this protects a single process only. Run the service with one worker.
+STORE_LOCK = threading.RLock()
+
+
+def synchronized(func: F) -> F:
+    """Run ``func`` while holding ``STORE_LOCK``."""
+
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with STORE_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper  # type: ignore[return-value]
 
 
 def _backup_corrupt_file(path: str, content: str | None = None) -> None:
@@ -28,6 +55,7 @@ def _backup_corrupt_file(path: str, content: str | None = None) -> None:
         pass
 
 
+@synchronized
 def atomic_write_json(path: str, data: Dict[str, Any]) -> None:
     """Write JSON to disk via a temp file to avoid partial writes."""
     dirpath = os.path.dirname(path) or "."
@@ -50,6 +78,7 @@ def atomic_write_json(path: str, data: Dict[str, Any]) -> None:
                 pass
 
 
+@synchronized
 def ensure_json_file(path: str, root_key: str) -> None:
     """Ensure a JSON file exists and is parseable, else reinitialize it."""
     if not os.path.exists(path):
@@ -67,6 +96,7 @@ def ensure_json_file(path: str, root_key: str) -> None:
         atomic_write_json(path, {root_key: []})
 
 
+@synchronized
 def load_json_file(path: str, root_key: str) -> Dict[str, Any]:
     """Load JSON from disk, resetting if the content is invalid."""
     ensure_json_file(path, root_key)

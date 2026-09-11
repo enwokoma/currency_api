@@ -17,7 +17,7 @@ import hashlib
 from typing import Dict, Any, Optional, Tuple
 
 from fastapi import HTTPException, status
-from storage_utils import atomic_write_json, ensure_json_file, load_json_file
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 
 
 USERS_FILE = "users.json"
@@ -95,6 +95,7 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+@synchronized
 def create_user(first_name: str, last_name: str, email: str, password: str) -> Dict[str, Any]:
     data = load_users()
     email_norm = normalize_email(email)
@@ -146,6 +147,7 @@ def _assert_user_exists(email: str) -> Dict[str, Any]:
     return data["users"][idx]
 
 
+@synchronized
 def start_verification(email: str) -> Dict[str, Any]:
     """Regenerate verification bundle for a user."""
     data = load_users()
@@ -161,6 +163,7 @@ def start_verification(email: str) -> Dict[str, Any]:
     return verification
 
 
+@synchronized
 def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = None) -> Dict[str, Any]:
     """Mark the user's email as verified if the provided OTP or token matches."""
     if not otp and not token:
@@ -190,6 +193,7 @@ def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = No
     return user
 
 
+@synchronized
 def authenticate_user(email: str, password: str) -> Dict[str, Any]:
     """Return the user if the email/password combination is valid."""
     data = load_users()
@@ -211,6 +215,7 @@ def authenticate_user(email: str, password: str) -> Dict[str, Any]:
     return user
 
 
+@synchronized
 def create_session(user_id: str) -> Dict[str, Any]:
     """Create a new session token for the given user id."""
     data = load_sessions()
@@ -236,6 +241,7 @@ def get_session(token: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+@synchronized
 def revoke_session(token: str) -> None:
     data = load_sessions()
     updated = False

@@ -35,6 +35,7 @@ from schemas import (
     RevokeByPrefixPayload,
     RevokeSelfPayload,
 )
+from storage_utils import synchronized
 from time_utils import to_wat_iso
 from services.transaction_service import (
     get_transactions_for_key,
@@ -103,6 +104,7 @@ def _get_user_key_by_prefix(user_id: str, key_prefix: str) -> Dict[str, Any]:
     raise HTTPException(status_code=404, detail="API key not found for this user")
 
 
+@synchronized
 def _revoke_key_record(record: Dict[str, Any]) -> None:
     data = load_keys()
     for rec in data.get("keys", []):
@@ -116,6 +118,7 @@ def _revoke_key_record(record: Dict[str, Any]) -> None:
     raise HTTPException(status_code=404, detail="API key not found")
 
 
+@synchronized
 def _rotate_key_record(record: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     """Rotate key without knowing the raw key."""
     data = load_keys()
@@ -134,6 +137,7 @@ def _rotate_key_record(record: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     raise HTTPException(status_code=404, detail="API key not found")
 
 
+@synchronized
 def _claim_keys_for_user(user_id: str, email: str) -> None:
     """Reassign legacy/public keys created with the user's email to the user id.
 

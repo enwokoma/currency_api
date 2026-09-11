@@ -39,7 +39,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Any, List, Optional
 
-from storage_utils import atomic_write_json, ensure_json_file, load_json_file
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 
 AUTHORIZATION_URL_TTL_SECONDS = 2 * 60 * 60  # Paystack authorization URLs expire after 2 hours
 
@@ -71,6 +71,7 @@ def save_transactions(data: Dict[str, Any]) -> None:
     atomic_write_json(TRANSACTIONS_FILE, data)
 
 
+@synchronized
 def record_transaction(
     api_key_hash: str,
     email: str,
@@ -143,6 +144,7 @@ def has_valid_authorization_url(
     return (time.time() - created_ts) < ttl_seconds
 
 
+@synchronized
 def update_transactions_for_key(
     api_key_hash: str,
     new_status: str,
@@ -220,6 +222,7 @@ def find_transaction_by_reference(reference: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+@synchronized
 def update_transaction_by_reference(
     reference: str,
     *,

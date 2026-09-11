@@ -93,3 +93,4 @@ Full request/response samples for every endpoint live in `DOCS.md`.
 - Per-key request counters live in `usage.json` and power `/usage`, `/user/usage`, and `/admin/usage`.
 - Rate limits and monthly credits are enforced per key tier/plan (free: 10 req/min, 200/day by default; paid limits derive from plan definitions in `main.py`).
 - Free and paid credits reset automatically each month; pending subscriptions mark keys accordingly until Paystack confirms.
+- Run the API as a **single worker process** (the default for `uvicorn main:app`). Store writes are serialized with an in-process lock and the rate limiter is in-memory, so multiple workers would race on the JSON files and each keep their own request counters.

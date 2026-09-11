@@ -54,7 +54,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import HTTPException
 
 from datetime import datetime, timezone, timedelta
-from storage_utils import atomic_write_json, ensure_json_file, load_json_file
+from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 
 # West Africa Time (UTC+1) timezone definition. Lagos does not observe DST.
 WAT = timezone(timedelta(hours=1))
@@ -159,6 +159,7 @@ def find_key_by_email(
     return None
 
 
+@synchronized
 def update_key_contact(
     key_hash: str, email: str, first_name: str, last_name: str
 ) -> Dict[str, Any]:
@@ -174,6 +175,7 @@ def update_key_contact(
     raise HTTPException(status_code=404, detail="Key not found for contact update")
 
 
+@synchronized
 def mark_pending_plan(
     key_hash: str, plan_code: str, *, deactivate: bool = False
 ) -> Dict[str, Any]:
@@ -191,6 +193,7 @@ def mark_pending_plan(
     raise HTTPException(status_code=404, detail="Key not found for pending plan update")
 
 
+@synchronized
 def generate_api_key(
     owner: str,
     email: str,
@@ -236,6 +239,7 @@ def generate_api_key(
     return raw
 
 
+@synchronized
 def generate_free_key(
     owner: str | None = None,
     email: str | None = None,
@@ -357,6 +361,7 @@ def validate_api_key(
     raise HTTPException(status_code=401, detail="Invalid API Key")
 
 
+@synchronized
 def revoke_api_key(raw_key: str) -> None:
     """Revoke a key so it can no longer be used."""
     hashed = hash_key(raw_key)
@@ -372,6 +377,7 @@ def revoke_api_key(raw_key: str) -> None:
     raise HTTPException(status_code=404, detail="API key not found")
 
 
+@synchronized
 def rotate_api_key(raw_key: str) -> Tuple[str, Dict[str, Any]]:
     """Generate a new raw key and swap the hash on an existing record.
 
@@ -395,6 +401,7 @@ def rotate_api_key(raw_key: str) -> Tuple[str, Dict[str, Any]]:
     raise HTTPException(status_code=404, detail="API key not found for rotation")
 
 
+@synchronized
 def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> Dict[str, Any]:
     """Reactivate a previously revoked or inactive key."""
     hashed = hash_key(raw_key)
@@ -412,6 +419,7 @@ def restore_api_key(raw_key: str, subscription_status: Optional[str] = None) -> 
     raise HTTPException(status_code=404, detail="API key not found")
 
 
+@synchronized
 def upgrade_key_tier_by_hash(
     key_hash: str,
     new_tier: str,
@@ -495,6 +503,7 @@ def upgrade_key_tier_by_hash(
     raise HTTPException(status_code=404, detail='Key not found for upgrade')
 
 
+@synchronized
 def update_subscription_identifiers(
     key_hash: str,
     *,
@@ -517,6 +526,7 @@ def update_subscription_identifiers(
         return record
     raise HTTPException(status_code=404, detail="Key not found for subscription update")
 
+@synchronized
 def charge_call_for_key(
     key_record: Dict[str, Any],
     free_monthly_credits: int,

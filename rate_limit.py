@@ -8,16 +8,31 @@ application based on the key's tier or subscription plan.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Dict, List
 
 from fastapi import HTTPException
 
-# In‑memory store of request timestamps per key
+# In‑memory store of request timestamps per key. It is per process: it resets
+# on restart and is not shared between workers, so run a single worker.
 request_timestamps: Dict[str, List[float]] = {}
+
+# Guards read-modify-write of ``request_timestamps`` across handler threads.
+_LOCK = threading.Lock()
 
 
 def allow_request(
+    key_hash: str,
+    per_minute: int,
+    per_day: int,
+) -> None:
+    """Enforce rate limits for a given key (thread-safe wrapper)."""
+    with _LOCK:
+        _allow_request_locked(key_hash, per_minute, per_day)
+
+
+def _allow_request_locked(
     key_hash: str,
     per_minute: int,
     per_day: int,
