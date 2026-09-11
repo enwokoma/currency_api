@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 import helpers
 from helpers import (
     ADMIN,
@@ -314,7 +312,17 @@ def test_transactions_listing_per_key(client):
     assert r.json()["transactions"][0]["api_key_hash"] == hash_key(key1)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: a pending /billing/subscribe key cannot read its own transactions (402) although DOCS say any key may")
-def test_pending_key_can_list_its_transactions(client):
+def test_pending_key_can_poll_its_transactions_without_being_charged(client, paystack):
     key = subscribe(client, "pendtx@example.com").json()["api_key"]
-    assert client.get("/transactions", headers={"X-API-KEY": key}).status_code == 200
+    r = client.get("/transactions", headers={"X-API-KEY": key})
+    assert r.status_code == 200
+    assert [t["status"] for t in r.json()["transactions"]] == ["pending"]
+
+    activate_via_webhook(client, paystack, key, "BASIC_MONTHLY", "ref_1")
+    before = key_record(key)["credits"]
+    assert client.get("/transactions", headers={"X-API-KEY": key}).json()["transactions"][0]["status"] == "success"
+    assert key_record(key)["credits"] == before, "reading history is not a billable call"
+
+    client.post("/admin/revoke-key", headers=ADMIN, json={"api_key": key})
+    assert client.get("/transactions", headers={"X-API-KEY": key}).status_code == 403
+    assert client.get("/transactions").status_code == 401

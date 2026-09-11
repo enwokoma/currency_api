@@ -18,7 +18,7 @@ from services.auth_service import (
     revoke_api_key,
     save_keys,
 )
-from billing_helpers import _normalize_contact_fields, _rate_limits_for_record
+from billing_helpers import _normalize_contact_fields, _rate_limits_for_record, billing_key_required
 from dependencies import api_key_required, session_required
 from schemas import (
     ClaimKeyPayload,
@@ -353,7 +353,11 @@ def list_user_usage(user: Dict[str, Any] = Depends(session_required)) -> Dict[st
 
 
 @user_router.get("/transactions", tags=["Billing"])
-def list_my_transactions(key: Dict[str, Any] = Depends(api_key_required)) -> Dict[str, Any]:
-    """Return the transaction history for the calling user's API key."""
+def list_my_transactions(key: Dict[str, Any] = Depends(billing_key_required)) -> Dict[str, Any]:
+    """Return the transaction history for the calling user's API key.
+
+    Uses the billing dependency so a key that is still pending payment can
+    poll its own checkout status, and so reading history costs no credit.
+    """
     txns = get_transactions_for_key(key["key_hash"])
     return {"transactions": txns}
