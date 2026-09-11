@@ -17,3 +17,6 @@ orjson
 
 # Environment variable management (optional, used in main.py)
 python-dotenv
+
+# Testing
+pytest

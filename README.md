@@ -74,6 +74,16 @@ Full request/response samples for every endpoint live in `DOCS.md`.
 
 ---
 
+## Running the tests
+
+```bash
+./.venv/Scripts/python -m pytest tests -q
+```
+
+The suite in `tests/` drives the app end to end over HTTP with the FastAPI test client. Every test gets fresh JSON stores in a scratch directory, and Paystack and both rate providers are mocked, so the run needs no network and never touches the project's own data files. Tests marked `xfail` document known bugs and turn red the moment the bug is fixed.
+
+---
+
 ## Documentation & Tools
 
 - **Detailed docs**: See [`DOCS.md`](DOCS.md) for endpoint-by-endpoint request/response bodies, headers, and workflow notes.
