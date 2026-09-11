@@ -45,11 +45,10 @@ revocation, tier upgrades/downgrades, and credit consumption.
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 import hashlib
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from fastapi import HTTPException
 
