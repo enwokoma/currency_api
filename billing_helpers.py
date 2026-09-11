@@ -10,7 +10,6 @@ from services.auth_service import (
     validate_api_key,
     load_keys,
     mark_pending_plan,
-    hash_key,
 )
 from services.billing_service import initialize_transaction
 from config import (

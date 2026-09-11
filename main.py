@@ -21,7 +21,6 @@ try:
     from fastapi.responses import ORJSONResponse
 except ImportError:
     # If orjson is not available, fall back to the standard library JSON response.
-    import json  # standard library
     from fastapi.responses import JSONResponse  # type: ignore
     # Alias ORJSONResponse to JSONResponse so FastAPI will use it as the default
     ORJSONResponse = JSONResponse  # type: ignore
@@ -54,9 +53,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import JSONResponse and HTMLResponse only. ORJSONResponse is
 # conditionally aliased above based on the availability of orjson.
 from fastapi.responses import JSONResponse, HTMLResponse  # noqa: F401
-from fastapi.openapi.utils import get_openapi
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
+import env  # noqa: F401  # loads .env before any os.getenv lookups
 from dependencies import api_key_auth_only
 from routers.admin import admin_router
 from routers.auth import auth_router
@@ -64,20 +63,6 @@ from routers.billing import billing_router
 from routers.core import core_router
 from routers.users import user_router
 from postman_exporter import export_postman_collection
-
-# Cache containers for generated OpenAPI docs (populated lazily).
-_cached_openapi: Dict[str, Any] | None = None
-_public_openapi: Dict[str, Any] | None = None
-
-# Try to load environment variables from a .env file if python-dotenv is installed.
-try:
-    from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
-except ImportError:
-    # python-dotenv is optional; environment variables can still be provided
-    pass
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -163,24 +148,13 @@ async def pretty_http_exception(request: Request, exc: HTTPException):
     )
 
 
-@app.middleware("http")
-async def prettify_json(request: Request, call_next):
-    resp = await call_next(request)
-    return resp
-
-
+# ``app.openapi()`` builds the schema from the app's own title, version,
+# description and routes, and caches it on the app, so both the protected and
+# the public endpoints serve the same document without keeping extra copies.
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi_json(_: Dict[str, Any] = Depends(api_key_auth_only)) -> JSONResponse:
     """Serve the OpenAPI schema, protected by API key."""
-    global _cached_openapi
-    if _cached_openapi is None:
-        _cached_openapi = get_openapi(
-            title=APP_TITLE,
-            version=APP_VERSION,
-            description=APP_DESCRIPTION,
-            routes=app.routes,
-        )
-    return JSONResponse(_cached_openapi)
+    return JSONResponse(app.openapi())
 
 
 @app.get("/docs", include_in_schema=False)
@@ -203,15 +177,7 @@ async def swagger_docs(_: Dict[str, Any] = Depends(api_key_auth_only)) -> HTMLRe
 @app.get("/public/openapi.json", include_in_schema=False)
 async def public_openapi_json() -> JSONResponse:
     """Serve the OpenAPI schema without authentication."""
-    global _public_openapi
-    if _public_openapi is None:
-        _public_openapi = get_openapi(
-            title=APP_TITLE,
-            version=APP_VERSION,
-            description=APP_DESCRIPTION,
-            routes=app.routes,
-        )
-    return JSONResponse(_public_openapi)
+    return JSONResponse(app.openapi())
 
 
 @app.get("/public/docs", include_in_schema=False)

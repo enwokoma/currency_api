@@ -33,7 +33,7 @@ from services.transaction_service import (
     update_transaction_by_reference,
     update_transactions_for_key,
 )
-from services.user_service import load_users, save_users, sanitize_user
+from services.user_service import load_users, sanitize_user
 
 admin_router = APIRouter(tags=["Admin"])
 

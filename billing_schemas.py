@@ -6,11 +6,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-
-class KeyContact(BaseModel):
-    email: str
-    first_name: str
-    last_name: str
+from schemas import KeyContact
 
 
 class SubscribePayload(KeyContact):
