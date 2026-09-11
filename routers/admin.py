@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from services.auth_service import (
     generate_api_key,
+    hash_key,
     revoke_api_key,
     restore_api_key,
     load_keys,
@@ -155,9 +156,10 @@ def admin_generate_key(
         active=payload.activate,
         subscription_status="active" if payload.activate else "pending",
     )
-    record = next((r for r in load_keys().get("keys", []) if r.get("owner") == payload.owner), None)
-    key_hash = record.get("key_hash") if record else None
-    if plan and key_hash:
+    # Look the new record up by the hash of the key we just issued. Matching on
+    # ``owner`` would pick the first key for that owner, which may be another key.
+    key_hash = hash_key(raw)
+    if plan:
         upgrade_key_tier_by_hash(
             key_hash=key_hash,
             new_tier="paid",
