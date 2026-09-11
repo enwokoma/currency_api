@@ -227,11 +227,14 @@ def test_free_key_cannot_use_historical_endpoints(client):
         assert r.status_code == 403, path
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: a forbidden historical call still consumes a free credit and a rate-limit slot")
 def test_forbidden_historical_call_is_not_charged(client):
     key = free_key(client, "charged@example.com")
-    client.post("/rate/historical", headers={"X-API-KEY": key}, json={"from_currency": "USD", "to_currency": "NGN", "date": "2024-12-31"})
-    assert usage(client, key)["remaining_credits"] == 199
+    for _ in range(12):  # more than the free per-minute limit: refusals must not count against it either
+        r = client.post("/rate/historical", headers={"X-API-KEY": key}, json={"from_currency": "USD", "to_currency": "NGN", "date": "2024-12-31"})
+        assert r.status_code == 403
+    u = usage(client, key)
+    assert u["remaining_credits"] == 199 and u["total_requests"] == 1, "only the /usage call itself was charged"
+    assert rate_call(client, key).status_code == 200, "no rate-limit slots were consumed by the refusals"
 
 
 @pytest.mark.xfail(strict=True, reason="BUG: admin-generated paid keys without a plan get 402 although config/docs promise default paid limits for them")

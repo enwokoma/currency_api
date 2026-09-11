@@ -21,10 +21,14 @@ from usage_stats import record_usage_event
 from services.user_service import get_user_by_session
 
 
-def api_key_required(request: Request) -> Dict[str, Any]:
-    """Resolve the calling key, enforce rate limits and charge credits."""
+def _resolve_key(request: Request) -> Dict[str, Any]:
+    """Validate the key named in the request without limiting or charging it."""
     raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
-    key_record = validate_api_key(raw_key)
+    return validate_api_key(raw_key)
+
+
+def _limit_and_charge(key_record: Dict[str, Any]) -> Dict[str, Any]:
+    """Enforce rate limits, consume one credit and record the usage event."""
     tier = key_record.get("tier", "paid")
     per_minute, per_day = _rate_limits_for_record(key_record)
     # Enforce rate limits
@@ -64,6 +68,11 @@ def api_key_required(request: Request) -> Dict[str, Any]:
     return key_record
 
 
+def api_key_required(request: Request) -> Dict[str, Any]:
+    """Resolve the calling key, enforce rate limits and charge credits."""
+    return _limit_and_charge(_resolve_key(request))
+
+
 def api_key_auth_only(request: Request) -> Dict[str, Any]:
     """Validate the calling key without rate limiting or charging credits.
 
@@ -75,14 +84,18 @@ def api_key_auth_only(request: Request) -> Dict[str, Any]:
 
 
 def paid_key_required(request: Request) -> Dict[str, Any]:
-    """Enforce that the caller is using a paid key (for premium endpoints)."""
-    key_record = api_key_required(request)
+    """Enforce that the caller is using a paid key (for premium endpoints).
+
+    The tier is checked before any rate-limit slot or credit is consumed,
+    so a free key that is refused with 403 is not charged for the refusal.
+    """
+    key_record = _resolve_key(request)
     if key_record.get("tier") != "paid":
         raise HTTPException(
             status_code=403,
             detail="This endpoint is available to paid subscriptions only.",
         )
-    return key_record
+    return _limit_and_charge(key_record)
 
 
 def session_required(request: Request) -> Dict[str, Any]:
