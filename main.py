@@ -57,7 +57,7 @@ from fastapi.responses import JSONResponse, HTMLResponse  # noqa: F401
 from fastapi.openapi.utils import get_openapi
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
-from dependencies import api_key_required
+from dependencies import api_key_auth_only
 from routers.admin import admin_router
 from routers.auth import auth_router
 from routers.billing import billing_router
@@ -170,7 +170,7 @@ async def prettify_json(request: Request, call_next):
 
 
 @app.get("/openapi.json", include_in_schema=False)
-async def openapi_json(_: Dict[str, Any] = Depends(api_key_required)) -> JSONResponse:
+async def openapi_json(_: Dict[str, Any] = Depends(api_key_auth_only)) -> JSONResponse:
     """Serve the OpenAPI schema, protected by API key."""
     global _cached_openapi
     if _cached_openapi is None:
@@ -184,7 +184,7 @@ async def openapi_json(_: Dict[str, Any] = Depends(api_key_required)) -> JSONRes
 
 
 @app.get("/docs", include_in_schema=False)
-async def swagger_docs(_: Dict[str, Any] = Depends(api_key_required)) -> HTMLResponse:
+async def swagger_docs(_: Dict[str, Any] = Depends(api_key_auth_only)) -> HTMLResponse:
     """Serve Swagger UI, protected by API key."""
     return get_swagger_ui_html(
         openapi_url="/openapi.json", title="Currency Conversion API Docs"

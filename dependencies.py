@@ -66,6 +66,16 @@ def api_key_required(request: Request) -> Dict[str, Any]:
     return key_record
 
 
+def api_key_auth_only(request: Request) -> Dict[str, Any]:
+    """Validate the calling key without rate limiting or charging credits.
+
+    Used for the protected documentation endpoints, where viewing the
+    schema should not consume the caller's monthly credits.
+    """
+    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
+    return validate_api_key(raw_key, allow_unpaid=True)
+
+
 def paid_key_required(request: Request) -> Dict[str, Any]:
     """Enforce that the caller is using a paid key (for premium endpoints)."""
     key_record = api_key_required(request)
