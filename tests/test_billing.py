@@ -66,12 +66,16 @@ def test_subscribe_reports_paystack_failure(client, paystack):
     assert r.status_code == 502 and "Paystack init failed" in r.json()["detail"]
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: after a Paystack init failure the key persists but the caller never received it, so the email is burned and a retry gets 400")
-def test_subscribe_can_be_retried_after_paystack_failure(client, paystack):
+def test_subscribe_rolls_back_the_key_when_checkout_fails(client, paystack):
     paystack.init_fail = True
     assert subscribe(client, "retry@example.com").status_code == 502
+    assert read_store("keys.json")["keys"] == [], "the never-issued key must not linger and reserve the email"
+    assert read_store("transactions.json")["transactions"] == []
+
     paystack.init_fail = False
-    assert subscribe(client, "retry@example.com").status_code == 200
+    r = subscribe(client, "retry@example.com")
+    assert r.status_code == 200
+    assert key_record(r.json()["api_key"])["subscription_status"] == "pending"
 
 
 def test_subscribe_requires_configured_paystack_plan_code(client, monkeypatch):

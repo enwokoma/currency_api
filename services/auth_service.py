@@ -365,6 +365,24 @@ def revoke_api_key(raw_key: str) -> None:
 
 
 @synchronized
+def delete_key_by_hash(key_hash: str) -> bool:
+    """Remove a key record outright.
+
+    Only for keys that were never revealed to a caller, e.g. rolling back a
+    /billing/subscribe whose Paystack checkout failed. Revocation, not
+    deletion, is the right tool for keys that have been issued.
+    """
+    data = load_keys()
+    keys = data.get("keys", [])
+    remaining = [r for r in keys if r.get("key_hash") != key_hash]
+    if len(remaining) == len(keys):
+        return False
+    data["keys"] = remaining
+    save_keys(data)
+    return True
+
+
+@synchronized
 def rotate_api_key(raw_key: str) -> Tuple[str, Dict[str, Any]]:
     """Generate a new raw key and swap the hash on an existing record.
 

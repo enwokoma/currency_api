@@ -7,8 +7,10 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from services.auth_service import (
+    delete_key_by_hash,
     find_key_by_email,
     generate_api_key,
+    hash_key,
     load_keys,
     update_key_contact,
     update_subscription_identifiers,
@@ -157,18 +159,21 @@ def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
         subscription_status="pending",
         pending_plan_code=plan["code"],
     )
-    record = find_key_by_email(email)
-    key_hash = record.get("key_hash") if record else None
-    if not key_hash:
-        raise HTTPException(status_code=500, detail="Failed to persist generated key")
-    auth_url, reference = _start_subscription_checkout(
-        key_hash=key_hash,
-        plan=plan,
-        email=email,
-        first_name=first,
-        last_name=last,
-        deactivate=True,
-    )
+    key_hash = hash_key(raw_key)
+    try:
+        auth_url, reference = _start_subscription_checkout(
+            key_hash=key_hash,
+            plan=plan,
+            email=email,
+            first_name=first,
+            last_name=last,
+            deactivate=True,
+        )
+    except Exception:
+        # The caller never receives the key when checkout fails, so leaving the
+        # record behind would only reserve the email and block a retry.
+        delete_key_by_hash(key_hash)
+        raise
     return {
         "tier": "paid",
         "api_key": raw_key,
