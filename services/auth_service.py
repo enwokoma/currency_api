@@ -53,24 +53,12 @@ from typing import Dict, Any, List, Optional
 
 from fastapi import HTTPException
 
-from datetime import datetime, timezone, timedelta
 from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 
-# West Africa Time (UTC+1) timezone definition. Lagos does not observe DST.
-WAT = timezone(timedelta(hours=1))
-
-def now_wat_iso() -> str:
-    """Return current time in West Africa Time (Lagos) as ISO without timezone.
-
-    This returns a string formatted like ``YYYY-MM-DDTHH:MM:SS.mmm`` without
-    including the ``+01:00`` offset. It still represents local time in
-    Africa/Lagos, but omits the timezone suffix for readability.
-    """
-    # Get current time in WAT
-    dt = datetime.now(WAT)
-    # Remove timezone info for a cleaner representation
-    naive = dt.replace(tzinfo=None)
-    return naive.isoformat(timespec="milliseconds")
+# All timestamps on key records are epoch seconds (``time.time()``), the same
+# unit used for credit resets, revocations, sessions and transactions. They are
+# formatted for humans at the API boundary with ``time_utils.to_wat_iso``,
+# which also passes through the ISO strings written by earlier versions.
 
 # Location of the key store
 KEY_FILE = "keys.json"
@@ -222,8 +210,7 @@ def generate_api_key(
         "owner": owner,
         "tier": "paid",
         "active": active,
-        # Human-readable creation time in WAT (ISO 8601 with ms)
-        "created_at": now_wat_iso(),
+        "created_at": time.time(),
         "plan_code": plan_code,
         "pending_plan_code": pending_plan_code,
         "credits": None,
@@ -288,8 +275,7 @@ def generate_free_key(
         "owner": owner_str,
         "tier": "free",
         "active": True,
-        # Human-readable creation time in WAT
-        "created_at": now_wat_iso(),
+        "created_at": time.time(),
         "plan_code": None,
         "pending_plan_code": None,
         # Credits are initialised on first use; reset timestamp is one month from now
@@ -501,8 +487,7 @@ def upgrade_key_tier_by_hash(
                 record['paystack_email_token'] = paystack_email_token
             record['subscription_status'] = subscription_status or 'active'
             record['active'] = True if active is None else active
-            # Record the upgrade timestamp in WAT for human readability
-            record['upgraded_at'] = now_wat_iso()
+            record['upgraded_at'] = time.time()
         elif new_tier == 'free':
             record['tier'] = 'free'
             record['plan_code'] = None
@@ -515,8 +500,7 @@ def upgrade_key_tier_by_hash(
             # Reset credits and set next reset timestamp for free tier
             record['credits'] = free_monthly_credits
             record['credits_reset_at'] = time.time() + SECONDS_PER_MONTH
-            # Record downgrade timestamp in WAT
-            record['upgraded_at'] = now_wat_iso()
+            record['upgraded_at'] = time.time()
         else:
             raise HTTPException(status_code=400, detail='Invalid tier specified')
         save_keys(data)
