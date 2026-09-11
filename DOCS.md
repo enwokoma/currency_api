@@ -307,6 +307,18 @@ Use this form for “click-to-verify” links in future email integrations.
 
 ### Admin generate key - `POST /admin/generate-key`
 - Headers: `X-ADMIN-TOKEN: {{admin_token}}`
+```json
+{
+  "owner": "admin-owner",
+  "email": "admin.generated@example.com",
+  "first_name": "Admin",
+  "last_name": "User",
+  "plan_code": "PRO_MONTHLY",
+  "activate": true
+}
+```
+- `plan_code` is optional. Omit it and the key runs on the default paid limits (100 req/min, 10k/day) with unlimited credits. If supplied it must be a known plan, otherwise HTTP 400 `Unknown plan_code`.
+- `activate` defaults to `true`; `false` issues the key inactive with `subscription_status=pending`.
 **Response 200**
 ```json
 {

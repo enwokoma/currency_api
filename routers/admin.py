@@ -145,8 +145,17 @@ def admin_generate_key(
     payload: OwnerPayload,
     _: bool = Depends(admin_required),
 ) -> Dict[str, Any]:
-    """Admin endpoint to generate a new paid API key."""
-    plan = next((p for p in PLANS if p["code"] == payload.plan_code), None) if payload.plan_code else None
+    """Admin endpoint to generate a new paid API key.
+
+    ``plan_code`` is optional: without it the key runs on the default paid
+    limits with unlimited credits. When given it must name a known plan;
+    a typo must not silently produce a plan-less key.
+    """
+    plan = None
+    if payload.plan_code:
+        plan = next((p for p in PLANS if p["code"] == payload.plan_code), None)
+        if plan is None:
+            raise HTTPException(status_code=400, detail="Unknown plan_code")
     raw = generate_api_key(
         payload.owner,
         email=payload.email,

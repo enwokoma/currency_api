@@ -39,6 +39,15 @@ def test_generate_key_with_plan_is_immediately_usable(client):
     assert r.status_code == 400, "email uniqueness applies to admin keys too"
 
 
+def test_generate_key_rejects_unknown_plan_code(client):
+    payload = {"owner": "typo", "email": "typo@example.com", "first_name": "T", "last_name": "Y", "plan_code": "PRO_MONTLY"}
+    r = client.post("/admin/generate-key", headers=ADMIN, json=payload)
+    assert r.status_code == 400 and "Unknown plan_code" in r.json()["detail"]
+    assert helpers.read_store("keys.json")["keys"] == [], "a rejected request must not leave a plan-less key behind"
+    payload["plan_code"] = None
+    assert client.post("/admin/generate-key", headers=ADMIN, json=payload).status_code == 200, "omitting the plan is still allowed"
+
+
 def test_generate_inactive_key_stays_pending(client):
     key = admin_key(client, "later", "later@example.com", plan_code="PRO_MONTHLY", activate=False)
     rec = key_record(key)
