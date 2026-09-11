@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 import json
+from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 try:
@@ -102,6 +103,16 @@ class PrettyJSONResponse(JSONResponse):
             return json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")
 
 
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    """Refresh the Postman collection from the live schema on startup."""
+    try:
+        export_postman_collection(fastapi_app)
+    except Exception as exc:
+        print(f"[postman-export] Failed to refresh collection: {exc}")
+    yield
+
+
 # FastAPI app configuration
 app = FastAPI(
     title=APP_TITLE,
@@ -111,6 +122,7 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
+    lifespan=lifespan,
 )
 
 # Enable CORS for all origins (adjust in production as needed)
@@ -128,17 +140,6 @@ app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(core_router)
 app.include_router(admin_router)
-
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
-    # Startup event
-    try:
-        export_postman_collection(fastapi_app)
-    except Exception as exc:
-        print(f"[postman-export] Failed to refresh collection: {exc}")
-    yield
 
 
 # Middleware: logging requests and pretty JSON formatting
@@ -166,8 +167,6 @@ async def pretty_http_exception(request: Request, exc: HTTPException):
 async def prettify_json(request: Request, call_next):
     resp = await call_next(request)
     return resp
-
-app.lifespan = lifespan
 
 
 @app.get("/openapi.json", include_in_schema=False)
