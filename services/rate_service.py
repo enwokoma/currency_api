@@ -2,31 +2,31 @@
 
 This module provides helpers for validating currency codes and fetching
 exchange rates. Rates are obtained from the open‑source Exchange API
-maintained by Fawaz Ahmed with a fallback to exchangerate.host. All
-codes are normalized to lowercase for consistency.
+maintained by Fawaz Ahmed, served from the jsDelivr CDN with the project's
+official Cloudflare Pages mirror as fallback. All codes are normalized to
+lowercase for consistency.
 """
 
 from __future__ import annotations
 
 import requests
 from datetime import datetime, date
-from typing import Dict
+from typing import Dict, Optional
 from fastapi import HTTPException
 
 
-# Endpoints for currency data
-PRIMARY_BASE_URL = (
-    "https://cdn.jsdelivr.net/npm/"
-    "@fawazahmed0/currency-api@latest/v1/currencies"
+# Endpoints for currency data. Both hosts serve the same dataset in the same
+# shape: ``{"date": "...", "<base>": {"<target>": rate, ...}}``. ``{date}`` is
+# either ``latest`` or a ``YYYY-MM-DD`` day.
+#
+# The previous fallback, api.exchangerate.host, has required an access key
+# since 2023 and now answers every unauthenticated call with an error, so it
+# never actually served a rate.
+PRIMARY_URL_TEMPLATE = (
+    "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@{date}/v1/currencies/{base}.json"
 )
-PRIMARY_HISTORICAL_BASE_URL = (
-    "https://cdn.jsdelivr.net/npm/"
-    "@fawazahmed0/currency-api@{date}/v1/currencies"
-)
-FALLBACK_URL_TEMPLATE = "https://api.exchangerate.host/latest?base={base}"
-FALLBACK_HISTORICAL_TEMPLATE = (
-    "https://api.exchangerate.host/{date}?base={base}"
-)
+FALLBACK_URL_TEMPLATE = "https://{date}.currency-api.pages.dev/v1/currencies/{base}.json"
+PROVIDER_TIMEOUT_SECONDS = 5
 
 # Static fallback rates used when external providers are unavailable. This
 # ensures the service can still function (albeit with approximate rates)
@@ -65,57 +65,53 @@ def validate_currency(code: str) -> str:
     return code
 
 
-def fetch_rates(base: str) -> Dict[str, float]:
-    """Fetch conversion rates for a given base currency.
-
-    Attempts to fetch from the primary provider first. If that fails,
-    falls back to exchangerate.host. Returns a dictionary mapping
-    target currencies to floating‑point rates.
-
-    Args:
-        base: The base currency code (lowercase).
-
-    Returns:
-        A mapping of target currency codes to their exchange rates.
-
-    Raises:
-        HTTPException: If neither provider responds successfully.
-    """
-    base = validate_currency(base)
-
-    # Try the primary provider
+def _fetch_from_provider(template: str, base: str, date_tag: str) -> Optional[Dict[str, float]]:
+    """Fetch one base's rates from a provider; return None on any failure."""
     try:
-        url = f"{PRIMARY_BASE_URL}/{base}.json"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            raw_rates = data.get(base)
-            if raw_rates:
-                return {k.lower(): float(v) for k, v in raw_rates.items()}
+        resp = requests.get(
+            template.format(date=date_tag, base=base),
+            timeout=PROVIDER_TIMEOUT_SECONDS,
+        )
+        if resp.status_code != 200:
+            return None
+        raw_rates = resp.json().get(base)
+        if not raw_rates:
+            return None
+        return {k.lower(): float(v) for k, v in raw_rates.items()}
     except Exception:
-        pass
+        return None
 
-    # Fallback provider
-    try:
-        url = FALLBACK_URL_TEMPLATE.format(base=base.upper())
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            raw_rates = data.get("rates")
-            if raw_rates:
-                return {k.lower(): float(v) for k, v in raw_rates.items()}
-    except Exception:
-        pass
 
+def _fetch_with_fallbacks(base: str, date_tag: str) -> Dict[str, float]:
+    """Try the CDN, then the mirror, then the static table."""
+    for template in (PRIMARY_URL_TEMPLATE, FALLBACK_URL_TEMPLATE):
+        rates = _fetch_from_provider(template, base, date_tag)
+        if rates:
+            return rates
     # If both providers fail, fall back to static rates. This prevents
     # returning a 502 error in offline environments. If the base is
     # known in ``STATIC_FALLBACK_RATES`` we return its mapping. If not,
     # provide at least a self conversion rate.
-    base_lower = base.lower()
-    if base_lower in STATIC_FALLBACK_RATES:
-        return STATIC_FALLBACK_RATES[base_lower]
-    # Provide a trivial self-rate as a last resort
-    return {base_lower: 1.0}
+    if base in STATIC_FALLBACK_RATES:
+        return STATIC_FALLBACK_RATES[base]
+    return {base: 1.0}
+
+
+def fetch_rates(base: str) -> Dict[str, float]:
+    """Fetch current conversion rates for a given base currency.
+
+    Attempts the primary CDN first, then the mirror, then the static
+    table. Returns a dictionary mapping target currencies to
+    floating‑point rates.
+
+    Args:
+        base: The base currency code (case insensitive).
+
+    Returns:
+        A mapping of lowercase target currency codes to their exchange rates.
+    """
+    base = validate_currency(base)
+    return _fetch_with_fallbacks(base, "latest")
 
 
 def _validate_date(date_str: str) -> str:
@@ -146,37 +142,8 @@ def fetch_historical_rates(base: str, date_str: str) -> Dict[str, float]:
         A mapping of target currency codes to their exchange rates on the date.
 
     Raises:
-        HTTPException: If providers fail and no cached/static rates are available.
+        HTTPException: If the currency code or date is invalid.
     """
     base = validate_currency(base)
     safe_date = _validate_date(date_str)
-
-    # Try primary historical provider
-    try:
-        url = f"{PRIMARY_HISTORICAL_BASE_URL.format(date=safe_date)}/{base}.json"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            raw_rates = data.get(base)
-            if raw_rates:
-                return {k.lower(): float(v) for k, v in raw_rates.items()}
-    except Exception:
-        pass
-
-    # Fallback provider
-    try:
-        url = FALLBACK_HISTORICAL_TEMPLATE.format(base=base.upper(), date=safe_date)
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            raw_rates = data.get("rates")
-            if raw_rates:
-                return {k.lower(): float(v) for k, v in raw_rates.items()}
-    except Exception:
-        pass
-
-    # Final static fallback mirrors the latest static rates when available.
-    base_lower = base.lower()
-    if base_lower in STATIC_FALLBACK_RATES:
-        return STATIC_FALLBACK_RATES[base_lower]
-    return {base_lower: 1.0}
+    return _fetch_with_fallbacks(base, safe_date)
