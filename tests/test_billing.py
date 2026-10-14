@@ -17,6 +17,7 @@ from helpers import (
     read_store,
     send_webhook,
     subscribe,
+    subscribe_key,
     transactions_for,
     upgrade,
 )
@@ -33,11 +34,15 @@ def test_plans_are_public(client):
 
 def test_subscribe_creates_pending_key_and_checkout(client, paystack):
     r = subscribe(client, " Bill@Example.com", owner="acct-42")
-    assert r.status_code == 200
+    assert r.status_code == 202
     body = r.json()
     assert body["tier"] == "paid" and body["plan"]["code"] == "BASIC_MONTHLY"
-    assert body["authorization_url"] == "https://checkout.paystack.com/ref_1" and body["reference"] == "ref_1"
-    key = body["api_key"]
+    assert not {"api_key", "authorization_url", "reference"} & set(body), "the key and checkout go by email only"
+    message = helpers.last_email_to("bill@example.com")
+    assert message["Subject"] == "Finish subscribing to Basic Monthly"
+    key = helpers.api_key_from_email("bill@example.com")
+    checkout = helpers.checkout_from_email("bill@example.com")
+    assert checkout == {"authorization_url": "https://checkout.paystack.com/ref_1", "reference": "ref_1"}
 
     rec = key_record(key)
     assert rec["active"] is False and rec["subscription_status"] == "pending"
@@ -46,7 +51,7 @@ def test_subscribe_creates_pending_key_and_checkout(client, paystack):
 
     txn = transactions_for(key)[0]
     assert txn["status"] == "pending" and txn["amount_naira"] == 2000
-    assert txn["paystack_plan_code"] == "PLN_basic" and txn["authorization_url"] == body["authorization_url"]
+    assert txn["paystack_plan_code"] == "PLN_basic" and txn["authorization_url"] == checkout["authorization_url"]
 
     init = paystack.initialized["ref_1"]
     assert init["email"] == "bill@example.com" and init["amount"] == 200000 and init["plan"] == "PLN_basic"
@@ -54,26 +59,33 @@ def test_subscribe_creates_pending_key_and_checkout(client, paystack):
     assert init["metadata"]["first_name"] == "Bill"
 
     assert rate_call(client, key).status_code == 402, "inactive until Paystack confirms"
-    assert subscribe(client, "bill@example.com").status_code == 400
+    again = subscribe(client, "bill@example.com")
+    assert again.status_code == 202 and again.json() == body, "a taken address gets the same answer"
+    assert helpers.last_email_to("bill@example.com")["Subject"] == "You already have an API key"
+    assert "POST /billing/upgrade" in helpers.last_email_to("bill@example.com").get_content()
+    assert len(read_store("keys.json")["keys"]) == 1 and paystack.init_count == 1
     assert subscribe(client, "other@example.com", plan_code="GOLD").status_code == 400
+    assert subscribe(client, "not-an-email").status_code == 400
 
 
-def test_subscribe_reports_paystack_failure(client, paystack):
+def test_subscribe_reports_paystack_failure_by_email(client, paystack):
     paystack.init_fail = True
     r = subscribe(client, "fail@example.com")
-    assert r.status_code == 502 and "Paystack init failed" in r.json()["detail"]
+    assert r.status_code == 202
+    message = helpers.last_email_to("fail@example.com")
+    assert message["Subject"] == "Subscription to Basic Monthly not started"
+    assert "API key:" not in message.get_content()
 
 
 def test_subscribe_rolls_back_the_key_when_checkout_fails(client, paystack):
     paystack.init_fail = True
-    assert subscribe(client, "retry@example.com").status_code == 502
+    assert subscribe(client, "retry@example.com").status_code == 202
     assert read_store("keys.json")["keys"] == [], "the never-issued key must not linger and reserve the email"
     assert read_store("transactions.json")["transactions"] == []
 
     paystack.init_fail = False
-    r = subscribe(client, "retry@example.com")
-    assert r.status_code == 200
-    assert key_record(r.json()["api_key"])["subscription_status"] == "pending"
+    key = helpers.subscribe_key(client, "retry@example.com")
+    assert key_record(key)["subscription_status"] == "pending"
 
 
 def test_subscribe_requires_configured_paystack_plan_code(client, monkeypatch):
@@ -171,7 +183,7 @@ def test_webhook_signature_and_body_validation(client):
 
 
 def test_webhook_charge_success_activates_and_is_idempotent(client, paystack):
-    key = subscribe(client, "hook@example.com").json()["api_key"]
+    key = subscribe_key(client, "hook@example.com")
     rec = activate_via_webhook(client, paystack, key, "BASIC_MONTHLY", "ref_1")
     assert rec["active"] is True and rec["plan_code"] == "BASIC_MONTHLY" and rec["credits"] == 5000
     assert rec["paystack_subscription_code"] == "SUB_basic" and rec["paystack_email_token"] == "ETK_basic"
@@ -189,7 +201,7 @@ def test_webhook_charge_success_activates_and_is_idempotent(client, paystack):
 
 
 def test_webhook_rejects_metadata_mismatch(client, paystack):
-    key = subscribe(client, "mm@example.com").json()["api_key"]
+    key = subscribe_key(client, "mm@example.com")
     paystack.mark_success("ref_1", "someone-else", "BASIC_MONTHLY")
     r = send_webhook(client, "charge.success", {"reference": "ref_1", "metadata": {"api_key_hash": hash_key(key), "plan_code": "BASIC_MONTHLY"}})
     assert r.status_code == 400 and "does not match API key" in r.json()["detail"]
@@ -197,7 +209,7 @@ def test_webhook_rejects_metadata_mismatch(client, paystack):
 
 
 def test_webhook_ignores_unknown_events_and_unknown_keys(client, paystack):
-    key = subscribe(client, "unk@example.com").json()["api_key"]
+    key = subscribe_key(client, "unk@example.com")
     assert send_webhook(client, "transfer.success", {"reference": "t1"}).status_code == 200
     paystack.mark_success("ref_9", "deadbeef", "BASIC_MONTHLY")
     r = send_webhook(client, "charge.success", {"reference": "ref_9", "metadata": {"api_key_hash": "deadbeef", "plan_code": "BASIC_MONTHLY"}})
@@ -206,7 +218,7 @@ def test_webhook_ignores_unknown_events_and_unknown_keys(client, paystack):
 
 
 def test_webhook_never_reactivates_a_revoked_key(client, paystack):
-    key = subscribe(client, "revhook@example.com").json()["api_key"]
+    key = subscribe_key(client, "revhook@example.com")
     assert client.post("/admin/revoke-key", headers=ADMIN, json={"api_key": key}).status_code == 200
     rec = activate_via_webhook(client, paystack, key, "BASIC_MONTHLY", "ref_1")
     assert rec["active"] is False and rec["revoked_at"] and rec["plan_code"] is None
@@ -215,7 +227,7 @@ def test_webhook_never_reactivates_a_revoked_key(client, paystack):
 
 
 def test_webhook_subscription_disable_downgrades_to_free(client, paystack):
-    key = subscribe(client, "dis@example.com").json()["api_key"]
+    key = subscribe_key(client, "dis@example.com")
     activate_via_webhook(client, paystack, key, "BASIC_MONTHLY", "ref_1")
     assert rate_call(client, key).status_code == 200
     hashed = hash_key(key)
@@ -283,7 +295,7 @@ def test_cancel_subscription(client, paystack):
     r = client.post("/billing/cancel", headers={"X-API-KEY": free})
     assert r.status_code == 400 and "No active Paystack subscription" in r.json()["detail"]
 
-    key = subscribe(client, "cancel@example.com").json()["api_key"]
+    key = subscribe_key(client, "cancel@example.com")
     activate_via_webhook(client, paystack, key, "BASIC_MONTHLY", "ref_1")
     upgrade(client, key, "PRO_MONTHLY")  # leaves a pending ref_2
 
@@ -314,7 +326,7 @@ def test_transactions_listing_per_key(client):
 
 
 def test_pending_key_can_poll_its_transactions_without_being_charged(client, paystack):
-    key = subscribe(client, "pendtx@example.com").json()["api_key"]
+    key = subscribe_key(client, "pendtx@example.com")
     r = client.get("/transactions", headers={"X-API-KEY": key})
     assert r.status_code == 200
     assert [t["status"] for t in r.json()["transactions"]] == ["pending"]

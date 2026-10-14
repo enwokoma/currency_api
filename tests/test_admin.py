@@ -12,7 +12,7 @@ from helpers import (
     key_record,
     rate_call,
     register_and_login,
-    subscribe,
+    subscribe_key,
     transactions_for,
 )
 
@@ -128,7 +128,7 @@ def test_admin_usage_report(client):
 
 
 def test_reconcile_transaction_after_missed_webhook(client, paystack):
-    key = subscribe(client, "recon@example.com").json()["api_key"]
+    key = subscribe_key(client, "recon@example.com")
     hashed = hash_key(key)
 
     assert client.post("/admin/reconcile-transaction", headers=ADMIN, json={"reference": " "}).status_code == 400
@@ -157,7 +157,7 @@ def test_reconcile_transaction_after_missed_webhook(client, paystack):
 
 
 def test_reconcile_unknown_local_reference_still_upgrades_key(client, paystack):
-    key = subscribe(client, "unknownref@example.com").json()["api_key"]
+    key = subscribe_key(client, "unknownref@example.com")
     paystack.mark_success("ref_offline", hash_key(key), "BASIC_MONTHLY")
     r = client.post("/admin/reconcile-transaction", headers=ADMIN, json={"reference": "ref_offline"})
     assert r.status_code == 200 and r.json()["transaction"] is None

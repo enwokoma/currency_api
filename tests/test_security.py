@@ -26,6 +26,7 @@ from helpers import (
     register,
     register_and_login,
     subscribe,
+    subscribe_key,
     transactions_for,
     upgrade,
     verification_for,
@@ -34,7 +35,7 @@ from helpers import (
 
 
 def _paid_victim(client, paystack, email="victim@example.com") -> str:
-    key = subscribe(client, email).json()["api_key"]
+    key = subscribe_key(client, email)
     activate_via_webhook(client, paystack, key, "BASIC_MONTHLY", "ref_1")
     return key
 
@@ -401,6 +402,18 @@ def test_subscribe_cannot_place_a_key_in_someone_elses_account(client):
     session = register_and_login(client, "account-owner@example.com")
     user_id = client.get("/user", headers=session).json()["user"]["id"]
     r = subscribe(client, "planted@example.com", owner=user_id)
-    assert r.status_code == 200
+    assert r.status_code == 202
     assert read_store("keys.json")["keys"][0]["owner"] == "planted@example.com"
     assert client.get("/user/keys", headers=session).json()["keys"] == []
+
+
+def test_paid_keys_from_subscribe_go_only_to_the_inbox(client, paystack):
+    owner_key = subscribe_key(client, "payer@example.com")
+    fresh = subscribe(client, "someone-else-paid@example.com")
+    taken = subscribe(client, "payer@example.com")
+    assert fresh.status_code == taken.status_code == 202 and fresh.text == taken.text
+    issued = helpers.api_key_from_email("someone-else-paid@example.com")
+    checkout = helpers.checkout_from_email("someone-else-paid@example.com")
+    assert issued not in fresh.text and checkout["authorization_url"] not in fresh.text
+    assert owner_key not in helpers.last_email_to("payer@example.com").get_content()
+    assert paystack.init_count == 2, "no checkout is started for a taken address"

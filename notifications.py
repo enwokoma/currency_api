@@ -6,7 +6,7 @@ They are meant to run as background tasks, after the response.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 from config import PUBLIC_BASE_URL
@@ -50,20 +50,51 @@ def send_api_key(email: str, raw_key: str, tier: str) -> bool:
     return send_email(email, "Your API key", body)
 
 
-def send_key_exists(email: str) -> bool:
+def send_key_exists(email: str, plan_name: Optional[str] = None) -> bool:
     """Tell the owner of ``email`` that a new key was requested for it."""
+    lines = [
+        "Someone asked for an API key for this email address, but it already has one,",
+        "so no new key was issued.",
+        "",
+        "If it was you, keep using your existing key. If you lost it and it is attached to",
+        "an account, sign in and rotate it with POST /user/keys/regenerate-by-prefix.",
+    ]
+    if plan_name:
+        lines += ["", f"To move that key to {plan_name}, call POST /billing/upgrade with it."]
+    lines += ["", "If it wasn't you, you can ignore this email. Your key has not changed."]
+    return send_email(email, "You already have an API key", "\n".join(lines))
+
+
+def send_subscription_checkout(
+    email: str, raw_key: str, plan: Dict[str, Any], authorization_url: str, reference: str
+) -> bool:
+    """Email a new paid key with the Paystack link that activates it."""
     body = "\n".join(
         [
-            "Someone asked for an API key for this email address, but it already has one,",
-            "so no new key was issued.",
+            f"Here is your API key for {plan['name']}:",
             "",
-            "If it was you, keep using your existing key. If you lost it and it is attached to",
-            "an account, sign in and rotate it with POST /user/keys/regenerate-by-prefix.",
+            f"API key: {raw_key}",
             "",
-            "If it wasn't you, you can ignore this email. Your key has not changed.",
+            "It stays inactive until payment completes. Pay here:",
+            "",
+            f"Checkout link: {authorization_url}",
+            f"Reference: {reference}",
+            "",
+            "Send the key in the X-API-KEY header. Keep it secret: it is shown only in this email.",
         ]
     )
-    return send_email(email, "You already have an API key", body)
+    return send_email(email, f"Finish subscribing to {plan['name']}", body)
+
+
+def send_subscription_failed(email: str, plan: Dict[str, Any]) -> bool:
+    """Tell ``email`` that checkout could not be started, so nothing was issued."""
+    body = "\n".join(
+        [
+            f"We could not start checkout for {plan['name']}, so no key was issued and you",
+            "have not been charged. Please try subscribing again in a few minutes.",
+        ]
+    )
+    return send_email(email, f"Subscription to {plan['name']} not started", body)
 
 
 def send_account_exists(email: str) -> bool:

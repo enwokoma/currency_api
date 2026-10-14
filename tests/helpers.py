@@ -192,6 +192,22 @@ def subscribe(client, email: str, plan_code="BASIC_MONTHLY", first="Bill", last=
     return client.post("/billing/subscribe", json=payload)
 
 
+def subscribe_key(client, email: str, plan_code="BASIC_MONTHLY", **kwargs) -> str:
+    """Subscribe and return the key from the email that follows."""
+    r = subscribe(client, email, plan_code=plan_code, **kwargs)
+    assert r.status_code == 202, r.text
+    return api_key_from_email(email)
+
+
+def checkout_from_email(email: str) -> Dict[str, str]:
+    """The checkout link and reference in the latest email sent to ``email``."""
+    body = last_email_to(email).get_content()
+    return {
+        "authorization_url": re.search(r"^Checkout link: (\S+)$", body, re.M).group(1),
+        "reference": re.search(r"^Reference: (\S+)$", body, re.M).group(1),
+    }
+
+
 def upgrade(client, key: str, plan_code: str, **contact):
     return client.post("/billing/upgrade", headers={"X-API-KEY": key}, json={"plan_code": plan_code, **contact})
 
