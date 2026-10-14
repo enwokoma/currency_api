@@ -26,6 +26,9 @@ SESSIONS_FILE = "sessions.json"
 
 # Verification codes expire after 15 minutes
 VERIFICATION_TTL_SECONDS = 15 * 60
+# A code is discarded after this many wrong guesses; a 6-digit OTP must not be
+# open to unlimited guessing while it is valid.
+MAX_VERIFICATION_ATTEMPTS = 5
 # Sessions last for 24 hours by default
 SESSION_TTL_SECONDS = 24 * 60 * 60
 
@@ -185,6 +188,15 @@ def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = No
     token_valid = bool(token and verification.get("token") == token)
     if not (otp_valid or token_valid):
         detail = "Invalid OTP" if otp and not token else "Invalid verification link"
+        attempts = int(verification.get("failed_attempts", 0)) + 1
+        if attempts >= MAX_VERIFICATION_ATTEMPTS:
+            user["verification"] = None
+            detail = "Too many incorrect attempts. Request a new code via /auth/resend-verification."
+        else:
+            verification["failed_attempts"] = attempts
+        user["updated_at"] = _now_iso()
+        data["users"][idx] = user
+        save_users(data)
         raise HTTPException(status_code=400, detail=detail)
     user["email_verified"] = True
     user["verification"] = None

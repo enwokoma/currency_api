@@ -192,3 +192,23 @@ def test_dev_flag_echoes_verification_codes(client, monkeypatch):
     assert r.json()["verification"] == {k: stored[k] for k in ("otp", "token", "expires_at")}
     r = client.post("/auth/resend-verification", json={"email": "dev@example.com"})
     assert r.json()["verification"]["otp"] == verification_for("dev@example.com")["otp"]
+
+
+def test_verification_code_is_discarded_after_repeated_wrong_guesses(client):
+    register(client, "guess@example.com")
+    v = verification_for("guess@example.com")
+    wrong = "000000" if v["otp"] != "000000" else "111111"
+    post = lambda **body: client.post("/auth/verify-email", json={"email": "guess@example.com", **body})  # noqa: E731
+    for _ in range(4):
+        r = post(otp=wrong)
+        assert r.status_code == 400 and r.json()["detail"] == "Invalid OTP"
+    r = post(token="verify_wrong")
+    assert r.status_code == 400 and "Too many incorrect attempts" in r.json()["detail"]
+    r = post(otp=v["otp"])
+    assert r.status_code == 400 and "No verification challenge" in r.json()["detail"], "the guessed-at code is gone"
+
+    assert client.post("/auth/resend-verification", json={"email": "guess@example.com"}).status_code == 200
+    fresh = verification_for("guess@example.com")
+    assert "failed_attempts" not in fresh
+    assert post(otp=wrong if fresh["otp"] != wrong else "222222").status_code == 400
+    assert post(otp=fresh["otp"]).status_code == 200
