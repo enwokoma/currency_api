@@ -125,11 +125,12 @@ def test_upgrade_updates_contact_and_keeps_emails_unique(client):
     assert rec["email"] == "three@example.com" and rec["first_name"] == "Tre"
 
 
-def test_upgrade_accepts_key_prefix_header(client):
+def test_upgrade_by_key_prefix_needs_an_owning_session(client):
     key = free_key(client, "prefix@example.com")
     prefix = hash_key(key)[:8]
     r = client.post("/billing/upgrade", headers={"X-API-KEY-PREFIX": prefix}, json={"plan_code": "BASIC_MONTHLY"})
-    assert r.status_code == 200 and key_record(key)["pending_plan_code"] == "BASIC_MONTHLY"
+    assert r.status_code == 401 and "prefix alone" in r.json()["detail"]
+    assert key_record(key)["pending_plan_code"] is None
     assert client.post("/billing/upgrade", json={"plan_code": "BASIC_MONTHLY"}).status_code == 401
 
 
