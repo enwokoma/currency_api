@@ -457,3 +457,29 @@ def test_billing_calls_are_rate_limited_per_key(client, monkeypatch):
 
     assert client.get("/transactions", headers={"X-API-KEY": free_key(client, "other-biller@example.com")}).status_code == 200
     assert rate_call(client, key).status_code == 200, "billing calls do not use the key's API rate limit"
+
+
+def test_unsigned_webhooks_cannot_fill_the_disk(client, monkeypatch):
+    import json
+
+    import routers.billing
+
+    monkeypatch.setattr(routers.billing, "WEBHOOK_MAX_BODY_BYTES", 2048)
+    monkeypatch.setattr(routers.billing, "WEBHOOK_REJECTED_LOG_LIMITS", (3, 100))
+    post = lambda body, sig="bad", **kw: client.post(  # noqa: E731
+        "/paystack/webhook", content=body, headers={"x-paystack-signature": sig, "content-type": "application/json"}, **kw
+    )
+    padded = b'{"event": "charge.success", "pad": "' + b"A" * 1500 + b'"}'
+    assert post(padded).status_code == 400
+    assert post(b"x" * 4096, sig=helpers.sign(b"x" * 4096)).status_code == 413, "too large even when signed"
+    assert post(iter([b"y" * 1500, b"y" * 1500])).status_code == 413, "chunked bodies are measured as they stream"
+    for _ in range(5):
+        assert post(b"{}").status_code == 400
+
+    with open("webhook_logs.json", encoding="utf-8") as fh:
+        entries = [json.loads(line) for line in fh]
+    assert [e["rejected"] for e in entries] == ["invalid signature", "body too large", "body too large"], "throttled"
+    assert entries[0]["size"] == len(padded) and all("body" not in e for e in entries)
+
+    signed = json.dumps({"event": "transfer.success", "data": {}}).encode()
+    assert post(signed, sig=helpers.sign(signed)).status_code == 200, "verified deliveries still go through"

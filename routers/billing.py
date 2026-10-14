@@ -33,7 +33,12 @@ from billing_schemas import SubscribePayload, UpgradePayload, VerifyTransactionP
 from dependencies import public_route_limit
 from mailer import valid_address
 from notifications import send_key_exists, send_subscription_checkout, send_subscription_failed
-from config import PLANS, FREE_TIER_MONTHLY_CREDITS
+from config import (
+    FREE_TIER_MONTHLY_CREDITS,
+    PLANS,
+    WEBHOOK_MAX_BODY_BYTES,
+    WEBHOOK_REJECTED_LOG_LIMITS,
+)
 from services.transaction_service import (
     find_transaction_by_reference,
     get_latest_transaction_for_key,
@@ -43,7 +48,8 @@ from services.transaction_service import (
     update_transaction_by_reference,
     update_transactions_for_key,
 )
-from webhook_logs import log_webhook_event
+from rate_limit import client_bucket, try_acquire
+from webhook_logs import log_rejected_webhook, log_webhook_event
 
 billing_router = APIRouter(tags=["Billing"])
 
@@ -436,14 +442,48 @@ def verify_billing_transaction(
     }
 
 
+def _log_rejected_webhook(request: Request, size: int, reason: str) -> None:
+    """Record a refused delivery, at most WEBHOOK_REJECTED_LOG_LIMITS per client."""
+    client = client_bucket(request.client.host if request.client else None)
+    per_minute, per_day = WEBHOOK_REJECTED_LOG_LIMITS
+    if try_acquire(f"webhook-rejected:{client}", per_minute, per_day):
+        log_rejected_webhook(size, reason)
+
+
+async def _read_webhook_body(request: Request) -> bytes:
+    """Read the body, refusing anything over WEBHOOK_MAX_BODY_BYTES.
+
+    The size is checked as the body streams in, so a request without a
+    Content-Length (chunked) cannot get past the limit either.
+    """
+    too_large = HTTPException(status_code=413, detail="Webhook body too large")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > WEBHOOK_MAX_BODY_BYTES:
+        _log_rejected_webhook(request, int(declared), "body too large")
+        raise too_large
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > WEBHOOK_MAX_BODY_BYTES:
+            _log_rejected_webhook(request, size, "body too large")
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @billing_router.post("/paystack/webhook", status_code=status.HTTP_200_OK, tags=["Billing"])
 async def paystack_webhook(request: Request) -> Dict[str, str]:
-    """Handle Paystack webhook events for subscription management."""
-    body = await request.body()
-    log_webhook_event(body)
+    """Handle Paystack webhook events for subscription management.
+
+    The signature is checked before anything is stored: only verified
+    deliveries are logged with their body.
+    """
+    body = await _read_webhook_body(request)
     signature = request.headers.get("x-paystack-signature")
     if not verify_paystack_signature(body, signature):
+        _log_rejected_webhook(request, len(body), "invalid signature")
         raise HTTPException(status_code=400, detail="Invalid Paystack signature")
+    log_webhook_event(body)
     event_type, api_key_hash, plan_code, info = extract_webhook_info(body)
     reference = info.get("reference")
     subscription_code = info.get("subscription_code")

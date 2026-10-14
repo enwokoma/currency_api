@@ -53,6 +53,12 @@ FREE_TIER_MONTHLY_CREDITS = 200
 BILLING_REQUESTS_PER_MINUTE = 20
 BILLING_REQUESTS_PER_DAY = 500
 
+# Paystack webhook: largest body accepted, and how many refused deliveries
+# (bad signature, too large) are recorded per client (per minute, per day).
+# Refused deliveries are logged as size and reason only, never their body.
+WEBHOOK_MAX_BODY_BYTES = 256 * 1024
+WEBHOOK_REJECTED_LOG_LIMITS = (10, 200)
+
 # Per-account sign-in lockout: after this many wrong passwords for one email
 # within the window, every password check for that email (a correct one
 # included) gets 429 until older failures age out. Unknown emails are counted
