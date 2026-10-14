@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import tempfile
 from typing import Any, Dict
@@ -115,11 +116,13 @@ def register(client, email: str, first="Ada", last="Lovelace", password=PASSWORD
     )
 
 
-def verification_for(email: str) -> Dict[str, Any]:
-    """The pending verification challenge, as the user's inbox would receive it."""
-    email_norm = email.strip().lower()
-    user = next(u for u in read_store("users.json")["users"] if u["email"] == email_norm)
-    return user["verification"]
+def verification_for(email: str) -> Dict[str, str]:
+    """The latest verification code and token, read from the email the user got."""
+    body = last_email_to(email).get_content()
+    return {
+        "otp": re.search(r"^Verification code: (\d{6})$", body, re.M).group(1),
+        "token": re.search(r"^Verification token: (\S+)$", body, re.M).group(1),
+    }
 
 
 def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:

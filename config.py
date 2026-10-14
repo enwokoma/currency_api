@@ -62,15 +62,9 @@ PUBLIC_ROUTE_LIMITS = {
     "subscribe": (5, 50),
 }
 
-# Local development only: echo email verification codes (OTP and link token)
-# in the /auth/register and /auth/resend-verification responses, for setups
-# with no mailer. Never enable it on a reachable deployment: anyone could then
-# verify any email address they register.
-DEV_RETURN_VERIFICATION_CODES = os.getenv("DEV_RETURN_VERIFICATION_CODES", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
+# Public address of this API (e.g. "https://api.example.com"), used to build
+# links in emails. Without it, emails carry codes but no links.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 
 # Outgoing email (see mailer.py). MAIL_BACKEND is "smtp" (default) or

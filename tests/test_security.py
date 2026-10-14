@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 import config
 import helpers
 import rate_limit
-import routers.auth
 from helpers import (
     ADMIN,
     PASSWORD,
@@ -196,13 +195,23 @@ def test_verification_codes_never_reach_the_caller(client):
     assert login.status_code == 403, "the account stays unverified"
 
 
-def test_dev_flag_echoes_verification_codes(client, monkeypatch):
-    monkeypatch.setattr(routers.auth, "DEV_RETURN_VERIFICATION_CODES", True)
-    r = register(client, "dev@example.com")
-    stored = verification_for("dev@example.com")
-    assert r.json()["verification"] == {k: stored[k] for k in ("otp", "token", "expires_at")}
-    r = client.post("/auth/resend-verification", json={"email": "dev@example.com"})
-    assert r.json()["verification"]["otp"] == verification_for("dev@example.com")["otp"]
+def test_verification_codes_are_emailed_to_the_address(client, monkeypatch):
+    import notifications
+
+    monkeypatch.setattr(notifications, "PUBLIC_BASE_URL", "https://api.example.com")
+    register(client, " Mail.Me@Example.com ")
+    stored = read_store("users.json")["users"][0]["verification"]
+    message = helpers.last_email_to("mail.me@example.com")
+    body = message.get_content()
+    assert message["Subject"] == "Verify your email address"
+    assert f"Verification code: {stored['otp']}" in body and f"Verification token: {stored['token']}" in body
+    link = next(line for line in body.splitlines() if line.startswith("https://api.example.com/auth/verify-email?"))
+    r = client.get(link.replace("https://api.example.com", ""))
+    assert r.status_code == 200 and r.json()["user"]["email_verified"] is True, "the emailed link verifies the address"
+
+    r = client.post("/auth/resend-verification", json={"email": "mail.me@example.com"})
+    assert r.status_code == 400, "already verified"
+    assert len(helpers.emails_to("mail.me@example.com")) == 1
 
 
 def test_verification_code_is_discarded_after_repeated_wrong_guesses(client):
@@ -220,7 +229,7 @@ def test_verification_code_is_discarded_after_repeated_wrong_guesses(client):
 
     assert client.post("/auth/resend-verification", json={"email": "guess@example.com"}).status_code == 200
     fresh = verification_for("guess@example.com")
-    assert "failed_attempts" not in fresh
+    assert "failed_attempts" not in read_store("users.json")["users"][0]["verification"]
     assert post(otp=wrong if fresh["otp"] != wrong else "222222").status_code == 400
     assert post(otp=fresh["otp"]).status_code == 200
 

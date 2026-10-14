@@ -69,8 +69,8 @@ def test_expired_verification_code_is_rejected_and_resend_recovers(client):
     r = client.post("/auth/resend-verification", json={"email": "exp@example.com"})
     assert r.status_code == 200
     fresh = verification_for("exp@example.com")
-    assert fresh["token"] != v["token"] and fresh["expires_at"] > time.time()
-    assert r.json()["verification"] == {"expires_at": fresh["expires_at"]}
+    assert fresh["token"] != v["token"] and r.json()["verification"]["expires_at"] > time.time()
+    assert set(r.json()["verification"]) == {"expires_at"}
     assert client.post("/auth/verify-email", json={"email": "exp@example.com", "otp": fresh["otp"]}).status_code == 200
 
 

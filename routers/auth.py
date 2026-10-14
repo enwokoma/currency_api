@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Query
 
-from config import DEV_RETURN_VERIFICATION_CODES
 from credential_utils import header_credential
 from dependencies import public_route_limit
+from notifications import send_verification
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
     FreeKeyPayload,
@@ -28,20 +28,6 @@ from services.user_service import (
 )
 
 auth_router = APIRouter()
-
-
-def _verification_view(verification: Dict[str, Any]) -> Dict[str, Any]:
-    """The part of a verification challenge the API caller may see.
-
-    The OTP and link token prove control of the inbox, so they must reach
-    the user by email only. ``DEV_RETURN_VERIFICATION_CODES`` echoes them
-    for local development without a mailer.
-    """
-    view: Dict[str, Any] = {"expires_at": verification.get("expires_at")}
-    if DEV_RETURN_VERIFICATION_CODES:
-        view["otp"] = verification.get("otp")
-        view["token"] = verification.get("token")
-    return view
 
 
 @auth_router.post(
@@ -77,8 +63,11 @@ def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
     status_code=201,
     dependencies=[Depends(public_route_limit("register"))],
 )
-def register_user(payload: RegisterPayload) -> Dict[str, Any]:
-    """Register a new user."""
+def register_user(payload: RegisterPayload, background: BackgroundTasks) -> Dict[str, Any]:
+    """Register a new user and email them a verification code.
+
+    The code proves control of the inbox, so it is never part of the response.
+    """
     if payload.password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Password and confirm password do not match")
     user_rec = create_user(
@@ -88,10 +77,11 @@ def register_user(payload: RegisterPayload) -> Dict[str, Any]:
         password=payload.password,
     )
     verification = user_rec.get("verification", {}) or {}
+    background.add_task(send_verification, user_rec["email"], verification)
     return {
-        "message": "User registered successfully. Please verify your email.",
+        "message": "User registered successfully. Check your email for the verification code.",
         "user": sanitize_user(user_rec),
-        "verification": _verification_view(verification),
+        "verification": {"expires_at": verification.get("expires_at")},
     }
 
 
@@ -100,12 +90,17 @@ def register_user(payload: RegisterPayload) -> Dict[str, Any]:
     tags=["User"],
     dependencies=[Depends(public_route_limit("resend-verification"))],
 )
-def resend_verification(payload: ResendVerificationPayload) -> Dict[str, Any]:
-    """Resend the verification code/link for an unverified user."""
-    verification = start_verification(payload.email.strip().lower())
+def resend_verification(
+    payload: ResendVerificationPayload,
+    background: BackgroundTasks,
+) -> Dict[str, Any]:
+    """Email a fresh verification code/link to an unverified user."""
+    email = payload.email.strip().lower()
+    verification = start_verification(email)
+    background.add_task(send_verification, email, verification)
     return {
         "message": "Verification code has been resent.",
-        "verification": _verification_view(verification),
+        "verification": {"expires_at": verification.get("expires_at")},
     }
 
 
