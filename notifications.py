@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 from config import PUBLIC_BASE_URL
 from mailer import send_email
-from services.user_service import VERIFICATION_TTL_SECONDS
+from services.user_service import PASSWORD_RESET_TTL_SECONDS, VERIFICATION_TTL_SECONDS
 
 
 def send_verification(email: str, verification: Dict[str, Any]) -> bool:
@@ -103,10 +103,42 @@ def send_account_exists(email: str) -> bool:
         [
             "Someone tried to create an account with this email address, but it already has one.",
             "",
-            "If it was you, log in with your existing password. If you never verified the address,",
-            "request a new code from /auth/resend-verification.",
+            "If it was you, log in with your existing password, or reset it with",
+            "POST /auth/forgot-password. If you never verified the address, request a new code",
+            "from /auth/resend-verification.",
             "",
             "If it wasn't you, you can ignore this email. Nothing about your account has changed.",
         ]
     )
     return send_email(email, "You already have an account", body)
+
+
+def send_password_reset(email: str, token: str) -> bool:
+    """Email the token that lets the owner of ``email`` set a new password."""
+    body = "\n".join(
+        [
+            "Someone asked to reset the password for this account.",
+            "",
+            f"Reset token: {token}",
+            "",
+            "Send it to POST /auth/reset-password with your email and a new password.",
+            f"It expires in {PASSWORD_RESET_TTL_SECONDS // 60} minutes and works once.",
+            "",
+            "If it wasn't you, ignore this email. Your password has not changed.",
+        ]
+    )
+    return send_email(email, "Reset your password", body)
+
+
+def send_password_changed(email: str) -> bool:
+    """Tell the owner of ``email`` that the password was just reset."""
+    body = "\n".join(
+        [
+            "The password for this account was just reset, and every signed-in session",
+            "was signed out.",
+            "",
+            "If it wasn't you, reset it again at once with POST /auth/forgot-password,",
+            "and check who can read this mailbox.",
+        ]
+    )
+    return send_email(email, "Your password was changed", body)

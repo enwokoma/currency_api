@@ -10,14 +10,23 @@ from credential_utils import header_credential
 from dependencies import public_route_limit
 from billing_helpers import _normalize_contact_fields
 from mailer import valid_address
-from notifications import send_account_exists, send_api_key, send_key_exists, send_verification
+from notifications import (
+    send_account_exists,
+    send_api_key,
+    send_key_exists,
+    send_password_changed,
+    send_password_reset,
+    send_verification,
+)
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
+    ForgotPasswordPayload,
     FreeKeyPayload,
     RegisterPayload,
     ResendVerificationPayload,
     VerifyEmailPayload,
     LoginPayload,
+    ResetPasswordPayload,
 )
 from services.user_service import (
     create_user,
@@ -25,8 +34,10 @@ from services.user_service import (
     verify_user,
     authenticate_user,
     create_session,
+    reset_password,
     revoke_session,
     sanitize_user,
+    start_password_reset,
 )
 
 auth_router = APIRouter()
@@ -190,3 +201,46 @@ def logout(request: Request) -> Dict[str, Any]:
     if token:
         revoke_session(token)
     return {"message": "Logged out successfully."}
+
+
+def _email_password_reset(email: str) -> None:
+    """Background half of /auth/forgot-password."""
+    token = start_password_reset(email)
+    if token is not None:
+        send_password_reset(email, token)
+
+
+@auth_router.post(
+    "/auth/forgot-password",
+    tags=["User"],
+    status_code=202,
+    dependencies=[Depends(public_route_limit("forgot-password"))],
+)
+def forgot_password(payload: ForgotPasswordPayload, background: BackgroundTasks) -> Dict[str, Any]:
+    """Email a password reset token to the address, if it has an account.
+
+    The answer is identical, and is sent before any lookup, whether or not
+    the address has an account.
+    """
+    background.add_task(_email_password_reset, payload.email.strip().lower())
+    return {"message": "If this address has an account, a reset token is on its way."}
+
+
+@auth_router.post(
+    "/auth/reset-password",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("reset-password"))],
+)
+def reset_password_with_token(
+    payload: ResetPasswordPayload,
+    background: BackgroundTasks,
+) -> Dict[str, Any]:
+    """Set a new password with the emailed token and sign out every session."""
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="Password and confirm password do not match")
+    email = payload.email.strip().lower()
+    reset_password(email, payload.token.strip(), payload.new_password)
+    background.add_task(send_password_changed, email)
+    return {
+        "message": "Password updated. Every session was signed out; sign in with the new password."
+    }

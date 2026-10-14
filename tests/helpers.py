@@ -133,6 +133,12 @@ def verification_for(email: str) -> Dict[str, str]:
     }
 
 
+def reset_token_from_email(email: str) -> str:
+    """The password reset token in the latest email sent to ``email``."""
+    body = last_email_to(email).get_content()
+    return re.search(r"^Reset token: (\S+)$", body, re.M).group(1)
+
+
 def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:
     r = register(client, email, **kwargs)
     assert r.status_code == 202, r.text

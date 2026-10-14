@@ -106,3 +106,18 @@ class LoginPayload(BaseModel):
 
     email: str
     password: str
+
+
+class ForgotPasswordPayload(BaseModel):
+    """Ask for a password reset token to be emailed."""
+
+    email: str
+
+
+class ResetPasswordPayload(BaseModel):
+    """Set a new password with the emailed reset token."""
+
+    email: str
+    token: str
+    new_password: str
+    confirm_password: str

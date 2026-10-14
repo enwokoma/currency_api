@@ -293,6 +293,11 @@ def test_public_routes_are_rate_limited_per_client(client, monkeypatch):
         "resend-verification": lambda i: client.post("/auth/resend-verification", json={"email": nobody}),
         "verify-email": lambda i: client.post("/auth/verify-email", json={"email": nobody, "otp": "123456"}),
         "subscribe": lambda i: subscribe(client, f"s{i}@example.com"),
+        "forgot-password": lambda i: client.post("/auth/forgot-password", json={"email": nobody}),
+        "reset-password": lambda i: client.post(
+            "/auth/reset-password",
+            json={"email": nobody, "token": "reset_x", "new_password": "Guess12345", "confirm_password": "Guess12345"},
+        ),
     }
     for name, call in attempts.items():
         codes = [call(i).status_code for i in range(3)]

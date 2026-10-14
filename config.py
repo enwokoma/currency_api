@@ -80,6 +80,8 @@ PUBLIC_ROUTE_LIMITS = {
     "verify-email": (10, 100),
     "resend-verification": (3, 30),
     "subscribe": (5, 50),
+    "forgot-password": (3, 30),
+    "reset-password": (10, 100),
 }
 
 # Public address of this API (e.g. "https://api.example.com"), used to build
