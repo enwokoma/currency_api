@@ -8,7 +8,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 
 from credential_utils import header_credential
 from dependencies import public_route_limit
-from notifications import send_verification
+from mailer import valid_address
+from notifications import send_account_exists, send_verification
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
     FreeKeyPayload,
@@ -60,29 +61,32 @@ def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
 @auth_router.post(
     "/auth/register",
     tags=["User"],
-    status_code=201,
+    status_code=202,
     dependencies=[Depends(public_route_limit("register"))],
 )
 def register_user(payload: RegisterPayload, background: BackgroundTasks) -> Dict[str, Any]:
     """Register a new user and email them a verification code.
 
-    The code proves control of the inbox, so it is never part of the response.
+    The answer is the same whether or not the email already has an account;
+    the owner of an existing account gets a notice by email instead. The code
+    proves control of the inbox, so it is never part of the response.
     """
     if payload.password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Password and confirm password do not match")
+    email = payload.email.strip().lower()
+    if not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
     user_rec = create_user(
         first_name=payload.first_name,
         last_name=payload.last_name,
-        email=payload.email,
+        email=email,
         password=payload.password,
     )
-    verification = user_rec.get("verification", {}) or {}
-    background.add_task(send_verification, user_rec["email"], verification)
-    return {
-        "message": "User registered successfully. Check your email for the verification code.",
-        "user": sanitize_user(user_rec),
-        "verification": {"expires_at": verification.get("expires_at")},
-    }
+    if user_rec is None:
+        background.add_task(send_account_exists, email)
+    else:
+        background.add_task(send_verification, email, user_rec["verification"])
+    return {"message": "Registration received. Check your email to verify your address."}
 
 
 @auth_router.post(
@@ -94,14 +98,15 @@ def resend_verification(
     payload: ResendVerificationPayload,
     background: BackgroundTasks,
 ) -> Dict[str, Any]:
-    """Email a fresh verification code/link to an unverified user."""
+    """Email a fresh verification code/link to an unverified user.
+
+    Answers the same for unknown, unverified and verified addresses.
+    """
     email = payload.email.strip().lower()
     verification = start_verification(email)
-    background.add_task(send_verification, email, verification)
-    return {
-        "message": "Verification code has been resent.",
-        "verification": {"expires_at": verification.get("expires_at")},
-    }
+    if verification is not None:
+        background.add_task(send_verification, email, verification)
+    return {"message": "If this address has an unverified account, a new code is on its way."}
 
 
 @auth_router.post(

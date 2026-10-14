@@ -29,6 +29,12 @@ VERIFICATION_TTL_SECONDS = 15 * 60
 # A code is discarded after this many wrong guesses; a 6-digit OTP must not be
 # open to unlimited guessing while it is valid.
 MAX_VERIFICATION_ATTEMPTS = 5
+# The one answer to every failed verification, so it never tells a caller
+# whether the address has an account, is already verified or had a code.
+INVALID_VERIFICATION = "Invalid or expired verification code. Request a new one if this keeps happening."
+# Hashed against when an email has no account, so that registering or logging
+# in costs the same time whether or not the address is known.
+_DUMMY_SALT_HEX = secrets.token_hex(16)
 # Sessions last for 24 hours by default
 SESSION_TTL_SECONDS = 24 * 60 * 60
 
@@ -100,13 +106,21 @@ def normalize_email(email: str) -> str:
 
 
 @synchronized
-def create_user(first_name: str, last_name: str, email: str, password: str) -> Dict[str, Any]:
+def create_user(
+    first_name: str, last_name: str, email: str, password: str
+) -> Optional[Dict[str, Any]]:
+    """Create an unverified user, or return None when the email is taken.
+
+    A taken email still costs one password hash, so the caller can answer
+    both cases the same way without the response time giving it away.
+    """
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
     data = load_users()
     email_norm = normalize_email(email)
     if _find_user_index(email_norm, data) is not None:
-        raise HTTPException(status_code=400, detail="Email is already registered")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+        _hash_password(password, _DUMMY_SALT_HEX)
+        return None
     user_id = uuid.uuid4().hex
     salt_hex, password_hash = _hash_password(password)
     verification = _generate_verification_bundle()
@@ -152,14 +166,16 @@ def _assert_user_exists(email: str) -> Dict[str, Any]:
 
 
 @synchronized
-def start_verification(email: str) -> Dict[str, Any]:
-    """Regenerate verification bundle for a user."""
+def start_verification(email: str) -> Optional[Dict[str, Any]]:
+    """Issue a fresh verification bundle, or None if there is nothing to verify.
+
+    Unknown and already-verified addresses both return None, so the caller
+    can answer every request the same way.
+    """
     data = load_users()
     idx = _find_user_index(email, data)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    if data["users"][idx].get("email_verified"):
-        raise HTTPException(status_code=400, detail="Email is already verified")
+    if idx is None or data["users"][idx].get("email_verified"):
+        return None
     verification = _generate_verification_bundle()
     data["users"][idx]["verification"] = verification
     data["users"][idx]["updated_at"] = _now_iso()
@@ -169,35 +185,37 @@ def start_verification(email: str) -> Dict[str, Any]:
 
 @synchronized
 def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = None) -> Dict[str, Any]:
-    """Mark the user's email as verified if the provided OTP or token matches."""
+    """Mark the user's email as verified if the provided OTP or token matches.
+
+    Every failure, including an unknown or already-verified address, raises
+    the same 400 ``INVALID_VERIFICATION``: only someone holding the current
+    code learns anything about the account.
+    """
     if not otp and not token:
         raise HTTPException(status_code=400, detail="Provide either otp or token")
+    invalid = HTTPException(status_code=400, detail=INVALID_VERIFICATION)
     data = load_users()
     idx = _find_user_index(email, data)
     if idx is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise invalid
     user = data["users"][idx]
-    if user.get("email_verified"):
-        return user
     verification = user.get("verification")
-    if not verification:
-        raise HTTPException(status_code=400, detail="No verification challenge is pending")
+    if user.get("email_verified") or not verification:
+        raise invalid
     if time.time() > verification.get("expires_at", 0):
-        raise HTTPException(status_code=400, detail="Verification code expired")
+        raise invalid
     otp_valid = bool(otp and verification.get("otp") == otp)
     token_valid = bool(token and verification.get("token") == token)
     if not (otp_valid or token_valid):
-        detail = "Invalid OTP" if otp and not token else "Invalid verification link"
         attempts = int(verification.get("failed_attempts", 0)) + 1
         if attempts >= MAX_VERIFICATION_ATTEMPTS:
             user["verification"] = None
-            detail = "Too many incorrect attempts. Request a new code via /auth/resend-verification."
         else:
             verification["failed_attempts"] = attempts
         user["updated_at"] = _now_iso()
         data["users"][idx] = user
         save_users(data)
-        raise HTTPException(status_code=400, detail=detail)
+        raise invalid
     user["email_verified"] = True
     user["verification"] = None
     user["updated_at"] = _now_iso()
@@ -212,6 +230,7 @@ def authenticate_user(email: str, password: str) -> Dict[str, Any]:
     data = load_users()
     idx = _find_user_index(email, data)
     if idx is None:
+        _hash_password(password, _DUMMY_SALT_HEX)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     user = data["users"][idx]
     salt_hex = user.get("salt")

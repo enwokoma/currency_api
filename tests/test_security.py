@@ -185,7 +185,7 @@ def test_verification_codes_never_reach_the_caller(client):
     # Registering someone else's address must not hand back the code that proves the inbox.
     r = register(client, "inbox-owner@example.com")
     v = verification_for("inbox-owner@example.com")
-    assert r.status_code == 201 and v["otp"] not in r.text and v["token"] not in r.text
+    assert r.status_code == 202 and v["otp"] not in r.text and v["token"] not in r.text
 
     r = client.post("/auth/resend-verification", json={"email": "inbox-owner@example.com"})
     fresh = verification_for("inbox-owner@example.com")
@@ -210,8 +210,7 @@ def test_verification_codes_are_emailed_to_the_address(client, monkeypatch):
     assert r.status_code == 200 and r.json()["user"]["email_verified"] is True, "the emailed link verifies the address"
 
     r = client.post("/auth/resend-verification", json={"email": "mail.me@example.com"})
-    assert r.status_code == 400, "already verified"
-    assert len(helpers.emails_to("mail.me@example.com")) == 1
+    assert r.status_code == 200 and len(helpers.emails_to("mail.me@example.com")) == 1, "verified: no new code"
 
 
 def test_verification_code_is_discarded_after_repeated_wrong_guesses(client):
@@ -220,12 +219,12 @@ def test_verification_code_is_discarded_after_repeated_wrong_guesses(client):
     wrong = "000000" if v["otp"] != "000000" else "111111"
     post = lambda **body: client.post("/auth/verify-email", json={"email": "guess@example.com", **body})  # noqa: E731
     for _ in range(4):
-        r = post(otp=wrong)
-        assert r.status_code == 400 and r.json()["detail"] == "Invalid OTP"
-    r = post(token="verify_wrong")
-    assert r.status_code == 400 and "Too many incorrect attempts" in r.json()["detail"]
+        assert post(otp=wrong).status_code == 400
+    assert read_store("users.json")["users"][0]["verification"]["failed_attempts"] == 4
+    assert post(token="verify_wrong").status_code == 400
+    assert read_store("users.json")["users"][0]["verification"] is None
     r = post(otp=v["otp"])
-    assert r.status_code == 400 and "No verification challenge" in r.json()["detail"], "the guessed-at code is gone"
+    assert r.status_code == 400 and "Invalid or expired" in r.json()["detail"], "the guessed-at code is gone"
 
     assert client.post("/auth/resend-verification", json={"email": "guess@example.com"}).status_code == 200
     fresh = verification_for("guess@example.com")
@@ -316,3 +315,37 @@ def test_rate_limits_are_shared_with_other_processes_and_survive_restarts():
     with pytest.raises(HTTPException) as refused:
         rate_limit.allow_request("shared", per_minute=3, per_day=100)
     assert refused.value.status_code == 429, "this process counts the other process's hit"
+
+
+def test_account_endpoints_answer_the_same_for_every_email(client, monkeypatch):
+    from services import user_service
+
+    helpers.relax_public_limits(monkeypatch)
+    register_and_login(client, "known@example.com")
+    register(client, "pending@example.com")
+    emails = ("fresh@example.com", "known@example.com", "pending@example.com")
+
+    responses = [register(client, email, password="Another123") for email in emails]
+    assert {r.status_code for r in responses} == {202} and len({r.text for r in responses}) == 1
+    assert len(read_store("users.json")["users"]) == 3, "only the fresh address got an account"
+    assert helpers.last_email_to("known@example.com")["Subject"] == "You already have an account"
+    assert helpers.last_email_to("pending@example.com")["Subject"] == "You already have an account"
+    r = client.post("/auth/login", json={"email": "known@example.com", "password": PASSWORD})
+    assert r.status_code == 200, "a second registration does not touch the existing account"
+
+    before = {e: len(helpers.emails_to(e)) for e in ("ghost@example.com", *emails)}
+    responses = [client.post("/auth/resend-verification", json={"email": e}) for e in ("ghost@example.com", *emails)]
+    assert {r.status_code for r in responses} == {200} and len({r.text for r in responses}) == 1
+    sent = {e: len(helpers.emails_to(e)) - n for e, n in before.items()}
+    assert sent == {"ghost@example.com": 0, "fresh@example.com": 1, "known@example.com": 0, "pending@example.com": 1}
+
+    responses = [client.post("/auth/verify-email", json={"email": e, "otp": "000000"}) for e in ("ghost@example.com", *emails)]
+    assert {r.status_code for r in responses} == {400} and len({r.text for r in responses}) == 1
+
+    hashed = []
+    real = user_service._hash_password
+    monkeypatch.setattr(user_service, "_hash_password", lambda *a: hashed.append(a) or real(*a))
+    unknown = client.post("/auth/login", json={"email": "ghost@example.com", "password": "guess-1234"})
+    wrong = client.post("/auth/login", json={"email": "known@example.com", "password": "guess-1234"})
+    assert unknown.status_code == wrong.status_code == 401 and unknown.text == wrong.text
+    assert len(hashed) == 2, "an unknown email costs the same password hash as a wrong password"

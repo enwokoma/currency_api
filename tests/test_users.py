@@ -10,13 +10,10 @@ from helpers import PASSWORD, read_store, register, register_and_login, verifica
 
 def test_register_normalises_email_and_keeps_codes_out_of_the_response(client):
     r = register(client, " Ada@Example.COM ")
-    assert r.status_code == 201
-    body = r.json()
-    assert body["user"]["email"] == "ada@example.com"
-    assert body["user"]["email_verified"] is False
-    assert not {"password_hash", "salt", "verification"} & set(body["user"])
-    assert set(body["verification"]) == {"expires_at"} and body["verification"]["expires_at"] > time.time()
+    assert r.status_code == 202
+    assert r.json() == {"message": "Registration received. Check your email to verify your address."}
     stored = read_store("users.json")["users"][0]
+    assert stored["email"] == "ada@example.com" and stored["email_verified"] is False
     assert stored["password_hash"] != PASSWORD and len(stored["salt"]) == 32
     v = stored["verification"]
     assert len(v["otp"]) == 6 and v["otp"].isdigit()
@@ -24,12 +21,18 @@ def test_register_normalises_email_and_keeps_codes_out_of_the_response(client):
     assert v["otp"] not in r.text and v["token"] not in r.text
 
 
-def test_register_validation(client):
+def test_register_validation(client, monkeypatch):
+    helpers.relax_public_limits(monkeypatch)
     assert register(client, "a@example.com", confirm="different").status_code == 400
     assert register(client, "a@example.com", password="short1", confirm="short1").status_code == 400
-    assert register(client, "a@example.com").status_code == 201
-    r = register(client, "A@EXAMPLE.com")
-    assert r.status_code == 400 and "already registered" in r.json()["detail"]
+    assert register(client, "not-an-email").status_code == 400
+    assert register(client, "a@example.com").status_code == 202
+    r = register(client, "A@EXAMPLE.com", password="Different123")
+    assert r.status_code == 202, "a second registration is accepted the same way"
+    assert len(read_store("users.json")["users"]) == 1, "but creates nothing"
+    assert helpers.last_email_to("a@example.com")["Subject"] == "You already have an account"
+    r = register(client, "a@example.com", password="short1", confirm="short1")
+    assert r.status_code == 400, "password rules are checked before the email is looked up"
 
 
 def test_verify_email_requires_exactly_one_credential(client):
@@ -38,13 +41,15 @@ def test_verify_email_requires_exactly_one_credential(client):
     post = lambda **body: client.post("/auth/verify-email", json={"email": "v@example.com", **body})  # noqa: E731
     assert post(otp=v["otp"], token=v["token"]).status_code == 400
     assert post().status_code == 400
-    assert post(otp="000000").status_code == 400 and "Invalid OTP" in post(otp="000000").json()["detail"]
-    assert "Invalid verification link" in post(token="verify_wrong").json()["detail"]
-    assert client.post("/auth/verify-email", json={"email": "nobody@example.com", "otp": v["otp"]}).status_code == 404
+    assert post(otp="000000").status_code == 400 and "Invalid or expired" in post(otp="000000").json()["detail"]
+    assert "Invalid or expired" in post(token="verify_wrong").json()["detail"]
+    r = client.post("/auth/verify-email", json={"email": "nobody@example.com", "otp": v["otp"]})
+    assert r.status_code == 400 and "Invalid or expired" in r.json()["detail"]
 
     r = post(otp=v["otp"])
     assert r.status_code == 200 and r.json()["user"]["email_verified"] is True
-    assert post(otp=v["otp"]).status_code == 200, "verifying again is idempotent"
+    r = post(otp=v["otp"])
+    assert r.status_code == 400 and "user" not in r.json(), "a used code reveals nothing about the account"
     assert client.post("/auth/login", json={"email": "v@example.com", "password": PASSWORD}).status_code == 200
 
 
@@ -67,18 +72,19 @@ def test_expired_verification_code_is_rejected_and_resend_recovers(client):
     assert r.status_code == 400 and "expired" in r.json()["detail"]
 
     r = client.post("/auth/resend-verification", json={"email": "exp@example.com"})
-    assert r.status_code == 200
+    assert r.status_code == 200 and set(r.json()) == {"message"}
     fresh = verification_for("exp@example.com")
-    assert fresh["token"] != v["token"] and r.json()["verification"]["expires_at"] > time.time()
-    assert set(r.json()["verification"]) == {"expires_at"}
+    assert fresh["token"] != v["token"]
     assert client.post("/auth/verify-email", json={"email": "exp@example.com", "otp": fresh["otp"]}).status_code == 200
 
 
 def test_resend_verification_edge_cases(client):
-    assert client.post("/auth/resend-verification", json={"email": "ghost@example.com"}).status_code == 404
+    ghost = client.post("/auth/resend-verification", json={"email": "ghost@example.com"})
+    assert ghost.status_code == 200 and helpers.emails_to("ghost@example.com") == []
     register_and_login(client, "done@example.com")
     r = client.post("/auth/resend-verification", json={"email": "done@example.com"})
-    assert r.status_code == 400 and "already verified" in r.json()["detail"]
+    assert r.status_code == 200 and r.json() == ghost.json()
+    assert len(helpers.emails_to("done@example.com")) == 1, "a verified account gets no new code"
 
 
 def test_login_paths(client):

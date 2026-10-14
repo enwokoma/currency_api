@@ -91,6 +91,14 @@ def patch_transaction(reference: str, **fields: Any) -> None:
     raise AssertionError("transaction not found")
 
 
+def relax_public_limits(monkeypatch) -> None:
+    """Lift the per-client limits for tests that call public routes many times."""
+    import config
+
+    for route in list(config.PUBLIC_ROUTE_LIMITS):
+        monkeypatch.setitem(config.PUBLIC_ROUTE_LIMITS, route, (1000, 10000))
+
+
 # --------------------------------------------------------------------------- mail
 def emails_to(address: str) -> list:
     return [m for m in OUTBOX if m["To"] == address.strip().lower()]
@@ -127,7 +135,7 @@ def verification_for(email: str) -> Dict[str, str]:
 
 def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:
     r = register(client, email, **kwargs)
-    assert r.status_code == 201, r.text
+    assert r.status_code == 202, r.text
     otp = verification_for(email)["otp"]
     r = client.post("/auth/verify-email", json={"email": email, "otp": otp})
     assert r.status_code == 200, r.text

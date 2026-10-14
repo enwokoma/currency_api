@@ -68,7 +68,7 @@ def test_corrupt_store_is_backed_up_and_reset(client):
 
 def test_empty_store_is_reinitialised(client):
     open("users.json", "w", encoding="utf-8").close()
-    assert helpers.register(client, "empty@example.com").status_code == 201
+    assert helpers.register(client, "empty@example.com").status_code == 202
 
 
 def test_atomic_writes_leave_no_temp_files(client):
