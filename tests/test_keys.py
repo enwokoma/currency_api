@@ -88,10 +88,12 @@ def test_free_credits_exhaust_then_reset_monthly(client):
     assert rec["credits_reset_at"] > time.time() + 29 * 24 * 3600
 
 
-def test_key_may_be_passed_as_query_parameter(client):
+def test_key_in_query_parameter_is_refused(client):
     key = free_key(client, "qp@example.com")
     r = client.post("/rate", params={"api_key": key}, json={"from_currency": "USD", "to_currency": "NGN"})
-    assert r.status_code == 200
+    assert r.status_code == 401 and "X-API-KEY header" in r.json()["detail"]
+    assert client.get("/docs", params={"api_key": key}).status_code == 401
+    assert key_record(key)["credits"] is None, "a refused call is not charged"
 
 
 def test_missing_invalid_revoked_and_pending_keys(client):

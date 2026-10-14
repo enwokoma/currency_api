@@ -98,7 +98,8 @@ def test_session_validation(client):
     headers = register_and_login(client, "sess@example.com")
     assert client.get("/user").status_code == 401
     assert client.get("/user", headers={"X-SESSION-TOKEN": "session_bogus"}).status_code == 401
-    assert client.get("/user", params={"session_token": headers["X-SESSION-TOKEN"]}).status_code == 200
+    r = client.get("/user", params={"session_token": headers["X-SESSION-TOKEN"]})
+    assert r.status_code == 401 and "X-SESSION-TOKEN header" in r.json()["detail"]
 
     data = read_store("sessions.json")
     data["sessions"][0]["expires_at"] = time.time() - 1

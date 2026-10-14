@@ -21,7 +21,8 @@ def test_admin_token_is_required(client):
     assert client.get("/admin/keys").status_code == 403
     assert client.get("/admin/keys", headers={"X-ADMIN-TOKEN": "wrong"}).status_code == 403
     assert client.get("/admin/keys", headers=ADMIN).status_code == 200
-    assert client.get("/admin/keys", params={"admin_token": helpers.ADMIN_TOKEN}).status_code == 200
+    r = client.get("/admin/keys", params={"admin_token": helpers.ADMIN_TOKEN})
+    assert r.status_code == 403 and "X-ADMIN-TOKEN header" in r.json()["detail"]
 
 
 def test_generate_key_with_plan_is_immediately_usable(client):

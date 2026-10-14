@@ -145,3 +145,24 @@ def test_password_hash_is_compared_in_constant_time(client, monkeypatch):
     data["users"][0]["password_hash"] = None
     write_store("users.json", data)
     assert login(PASSWORD).status_code == 401, "a record without a hash refuses the login"
+
+
+def test_credentials_are_refused_in_the_query_string(client):
+    key = free_key(client, "query@example.com")
+    session = register_and_login(client, "query-user@example.com")
+    token = session["X-SESSION-TOKEN"]
+
+    r = client.get("/transactions", params={"api_key": key})
+    assert r.status_code == 401 and "X-API-KEY header" in r.json()["detail"]
+    r = client.post("/billing/cancel", params={"session_token": token, "api_key_prefix": hash_key(key)[:8]})
+    assert r.status_code == 401 and "X-SESSION-TOKEN header" in r.json()["detail"]
+
+    # Logout must not quietly succeed while leaving the session alive.
+    r = client.post("/auth/logout", params={"session_token": token})
+    assert r.status_code == 401 and "X-SESSION-TOKEN header" in r.json()["detail"]
+    assert client.get("/user", headers=session).status_code == 200
+    assert client.post("/auth/logout", headers=session).status_code == 200
+    assert client.get("/user", headers=session).status_code == 401
+
+    # A header wins; an unrelated query string is not a credential.
+    assert client.get("/usage", headers={"X-API-KEY": key}, params={"page": 1}).status_code == 200

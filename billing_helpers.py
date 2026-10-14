@@ -6,6 +6,7 @@ from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, Request
 
+from credential_utils import header_credential
 from services.auth_service import (
     validate_api_key,
     load_keys,
@@ -87,14 +88,14 @@ def billing_key_required(request: Request) -> Dict[str, Any]:
     ``X-API-KEY``, or a session that owns the key (``X-SESSION-TOKEN``) with
     ``X-API-KEY-PREFIX`` naming which of the user's keys to use.
     """
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
-    session_token = request.headers.get("X-SESSION-TOKEN")
+    raw_key = header_credential(request, "X-API-KEY", "api_key")
+    session_token = header_credential(request, "X-SESSION-TOKEN", "session_token")
     if raw_key:
         key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
     elif session_token:
         user = get_user_by_session(session_token)
         key_record = _get_owned_key_by_prefix(user["id"], request.headers.get("X-API-KEY-PREFIX") or "")
-    elif request.headers.get("X-API-KEY-PREFIX") or request.query_params.get("api_key_prefix"):
+    elif request.headers.get("X-API-KEY-PREFIX"):
         raise HTTPException(
             status_code=401,
             detail="A key prefix alone is not accepted. Send X-API-KEY, or X-SESSION-TOKEN for a key you own.",

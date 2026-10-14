@@ -8,6 +8,7 @@ from typing import Dict, Any
 from fastapi import HTTPException, Request
 
 from admin_utils import get_expected_admin_token
+from credential_utils import header_credential
 from services.auth_service import (
     validate_api_key,
     charge_call_for_key,
@@ -24,7 +25,7 @@ from services.user_service import get_user_by_session
 
 def _resolve_key(request: Request) -> Dict[str, Any]:
     """Validate the key named in the request without limiting or charging it."""
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
+    raw_key = header_credential(request, "X-API-KEY", "api_key")
     return validate_api_key(raw_key)
 
 
@@ -80,7 +81,7 @@ def api_key_auth_only(request: Request) -> Dict[str, Any]:
     Used for the protected documentation endpoints, where viewing the
     schema should not consume the caller's monthly credits.
     """
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
+    raw_key = header_credential(request, "X-API-KEY", "api_key")
     return validate_api_key(raw_key, allow_unpaid=True)
 
 
@@ -101,14 +102,14 @@ def paid_key_required(request: Request) -> Dict[str, Any]:
 
 def session_required(request: Request) -> Dict[str, Any]:
     """Resolve the calling user based on a session token."""
-    token = request.headers.get("X-SESSION-TOKEN") or request.query_params.get("session_token")
+    token = header_credential(request, "X-SESSION-TOKEN", "session_token")
     user = get_user_by_session(token)
     return user
 
 
 def admin_required(request: Request) -> bool:
     """Validate the admin token for protected admin endpoints."""
-    provided = request.headers.get("X-ADMIN-TOKEN") or request.query_params.get("admin_token")
+    provided = header_credential(request, "X-ADMIN-TOKEN", "admin_token", status_code=403)
     expected = get_expected_admin_token()
     # Constant-time comparison, on bytes so a non-ASCII header is a plain mismatch.
     if not provided or not expected or not hmac.compare_digest(

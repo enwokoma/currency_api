@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Query
 
+from credential_utils import header_credential
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
     FreeKeyPayload,
@@ -135,7 +136,7 @@ def login(payload: LoginPayload) -> Dict[str, Any]:
 @auth_router.post("/auth/logout", tags=["User"])
 def logout(request: Request) -> Dict[str, Any]:
     """Revoke an active session token."""
-    token = request.headers.get("X-SESSION-TOKEN") or request.query_params.get("session_token")
+    token = header_credential(request, "X-SESSION-TOKEN", "session_token")
     if token:
         revoke_session(token)
     return {"message": "Logged out successfully."}
