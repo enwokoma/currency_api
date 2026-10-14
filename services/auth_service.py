@@ -109,7 +109,11 @@ def _validate_contact(email: str, first_name: str, last_name: str) -> Dict[str, 
 
 
 def assert_unique_key_email(email: str, skip_key_hash: Optional[str] = None) -> None:
-    """Ensure no other *active* key already uses the given email."""
+    """Ensure no other *active* key already uses the given email.
+
+    The error never describes the other key: the caller has only typed an
+    email address and has not shown that the key is theirs.
+    """
     email_norm = normalize_email(email)
     data = load_keys()
     for record in data.get("keys", []):
@@ -120,10 +124,9 @@ def assert_unique_key_email(email: str, skip_key_hash: Optional[str] = None) -> 
             and record.get("email") == email_norm
             and record.get("active", True)
         ):
-            prefix = (record.get("key_hash") or "")[:8]
             raise HTTPException(
                 status_code=400,
-                detail=f"Email is already associated with an API key (prefix {prefix}).",
+                detail="Email is already associated with an API key.",
             )
 
 
