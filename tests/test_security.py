@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 
+import helpers
 import routers.auth
 from helpers import (
     ADMIN,
@@ -212,3 +213,31 @@ def test_verification_code_is_discarded_after_repeated_wrong_guesses(client):
     assert "failed_attempts" not in fresh
     assert post(otp=wrong if fresh["otp"] != wrong else "222222").status_code == 400
     assert post(otp=fresh["otp"]).status_code == 200
+
+
+def test_cors_never_allows_credentialed_cross_origin_requests(client):
+    preflight = {
+        "Origin": "https://evil.example",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "x-session-token",
+    }
+    r = client.options("/billing/cancel", headers=preflight)
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "*", "the origin is not reflected back"
+    assert "access-control-allow-credentials" not in r.headers
+
+    r = client.get("/health", headers={"Origin": "https://evil.example", "Cookie": "session=x"})
+    assert r.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-credentials" not in r.headers
+
+
+def test_cors_origins_are_configured_from_the_environment():
+    import config
+    from fastapi.middleware.cors import CORSMiddleware
+
+    assert config.parse_cors_origins(None) == ["*"]
+    assert config.parse_cors_origins("  ") == ["*"]
+    assert config.parse_cors_origins(" https://a.example , https://b.example ,") == ["https://a.example", "https://b.example"]
+    cors = next(m for m in helpers.main.app.user_middleware if m.cls is CORSMiddleware)
+    assert cors.kwargs["allow_origins"] == config.CORS_ALLOW_ORIGINS
+    assert cors.kwargs["allow_credentials"] is False

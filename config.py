@@ -8,6 +8,7 @@ their own scope or repeating environment lookups.
 from __future__ import annotations
 
 import os
+from typing import List, Optional
 
 import env  # noqa: F401  # ensures .env is loaded before reading os.getenv
 
@@ -55,6 +56,19 @@ DEV_RETURN_VERIFICATION_CODES = os.getenv("DEV_RETURN_VERIFICATION_CODES", "").s
     "true",
     "yes",
 }
+
+
+def parse_cors_origins(raw: Optional[str]) -> List[str]:
+    """Split a comma-separated origin list; unset or blank means any origin."""
+    origins = [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
+    return origins or ["*"]
+
+
+# Origins allowed to call the API from a browser (comma-separated), e.g.
+# "https://app.example.com,https://admin.example.com". Defaults to any origin,
+# which is safe because cross-origin requests never carry credentials: every
+# credential is a header the calling page must set itself, never a cookie.
+CORS_ALLOW_ORIGINS = parse_cors_origins(os.getenv("CORS_ALLOW_ORIGINS"))
 
 # Default paid limits for keys that are tier='paid' but have no plan_code
 # These limits are applied to admin-generated keys and any paid key that

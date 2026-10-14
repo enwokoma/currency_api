@@ -56,6 +56,7 @@ from fastapi.responses import JSONResponse, HTMLResponse  # noqa: F401
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
 import env  # noqa: F401  # loads .env before any os.getenv lookups
+from config import CORS_ALLOW_ORIGINS
 from dependencies import api_key_auth_only
 from routers.admin import admin_router
 from routers.auth import auth_router
@@ -110,11 +111,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Enable CORS for all origins (adjust in production as needed)
+# CORS: origins come from CORS_ALLOW_ORIGINS (default any). Credentials are
+# never allowed: the API authenticates with headers, not cookies, and a
+# wildcard origin with credentials would let any site make credentialed calls.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
