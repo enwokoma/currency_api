@@ -42,7 +42,7 @@ def test_subscribe_creates_pending_key_and_checkout(client, paystack):
     rec = key_record(key)
     assert rec["active"] is False and rec["subscription_status"] == "pending"
     assert rec["pending_plan_code"] == "BASIC_MONTHLY" and rec["plan_code"] is None
-    assert rec["email"] == "bill@example.com" and rec["owner"] == "acct-42"
+    assert rec["email"] == "bill@example.com" and rec["owner"] == "bill@example.com", "a supplied owner is ignored"
 
     txn = transactions_for(key)[0]
     assert txn["status"] == "pending" and txn["amount_naira"] == 2000

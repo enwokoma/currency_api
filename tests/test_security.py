@@ -395,3 +395,12 @@ def test_free_keys_go_only_to_the_inbox(client):
     assert helpers.last_email_to("owner-of-inbox@example.com")["Subject"] == "You already have an API key"
     assert victim_key not in helpers.last_email_to("owner-of-inbox@example.com").get_content()
     assert len(read_store("keys.json")["keys"]) == 2
+
+
+def test_subscribe_cannot_place_a_key_in_someone_elses_account(client):
+    session = register_and_login(client, "account-owner@example.com")
+    user_id = client.get("/user", headers=session).json()["user"]["id"]
+    r = subscribe(client, "planted@example.com", owner=user_id)
+    assert r.status_code == 200
+    assert read_store("keys.json")["keys"][0]["owner"] == "planted@example.com"
+    assert client.get("/user/keys", headers=session).json()["keys"] == []

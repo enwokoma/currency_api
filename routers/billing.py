@@ -154,9 +154,8 @@ def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
             status_code=400,
             detail="Email already has an API key. Use /billing/upgrade with that key.",
         )
-    owner = payload.owner or email
     raw_key = generate_api_key(
-        owner=owner,
+        owner=email,
         email=email,
         first_name=first,
         last_name=last,
