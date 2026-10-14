@@ -349,3 +349,35 @@ def test_account_endpoints_answer_the_same_for_every_email(client, monkeypatch):
     wrong = client.post("/auth/login", json={"email": "known@example.com", "password": "guess-1234"})
     assert unknown.status_code == wrong.status_code == 401 and unknown.text == wrong.text
     assert len(hashed) == 2, "an unknown email costs the same password hash as a wrong password"
+
+
+def test_repeated_wrong_passwords_lock_the_account_for_a_while(client, monkeypatch):
+    helpers.relax_public_limits(monkeypatch)
+    register_and_login(client, "locked@example.com")
+    register_and_login(client, "bystander@example.com")
+    login = lambda email, pw: client.post("/auth/login", json={"email": email, "password": pw})  # noqa: E731
+
+    assert login("locked@example.com", "wrong-1").status_code == 401
+    assert login("locked@example.com", PASSWORD).status_code == 200, "a correct password resets the count"
+    for i in range(config.LOGIN_MAX_FAILURES):
+        assert login("locked@example.com", f"wrong-{i}").status_code == 401
+    r = login("locked@example.com", PASSWORD)
+    assert r.status_code == 429 and "Too many failed sign-in attempts" in r.json()["detail"]
+    assert login("bystander@example.com", PASSWORD).status_code == 200, "other accounts are unaffected"
+
+    # Password confirmations share the count: a stolen session cannot keep guessing either.
+    session = register_and_login(client, "confirm@example.com")
+    for i in range(config.LOGIN_MAX_FAILURES):
+        r = client.post("/user/keys/revoke", headers=session, json={"api_key": "free_x", "password": f"wrong-{i}"})
+        assert r.status_code == 401
+    r = client.post("/user/keys/revoke", headers=session, json={"api_key": "free_x", "password": PASSWORD})
+    assert r.status_code == 429
+
+    # Unknown emails lock the same way, so the lockout says nothing about who has an account.
+    for i in range(config.LOGIN_MAX_FAILURES):
+        assert login("nobody@example.com", f"wrong-{i}").status_code == 401
+    assert login("nobody@example.com", "anything").status_code == 429
+
+    later = time.time() + config.LOGIN_LOCKOUT_SECONDS + 1
+    monkeypatch.setattr(rate_limit.time, "time", lambda: later)
+    assert login("locked@example.com", PASSWORD).status_code == 200, "the lock lifts once failures age out"

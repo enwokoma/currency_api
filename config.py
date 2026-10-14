@@ -47,6 +47,14 @@ FREE_REQUESTS_PER_MINUTE = 10
 FREE_REQUESTS_PER_DAY = 200
 FREE_TIER_MONTHLY_CREDITS = 200
 
+# Per-account sign-in lockout: after this many wrong passwords for one email
+# within the window, every password check for that email (a correct one
+# included) gets 429 until older failures age out. Unknown emails are counted
+# the same way, so the lockout reveals nothing. Trade-off: anyone can lock an
+# account for the window by failing on purpose; per-client limits slow that.
+LOGIN_MAX_FAILURES = 10
+LOGIN_LOCKOUT_SECONDS = 15 * 60
+
 # Per-client limits for routes that take no credential, as (requests per
 # minute, requests per day) per route and client address. They slow password
 # and verification-code guessing, bulk key minting and checkout spam. The

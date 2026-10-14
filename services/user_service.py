@@ -18,6 +18,9 @@ import hashlib
 from typing import Dict, Any, Optional, Tuple
 
 from fastapi import HTTPException, status
+
+from config import LOGIN_LOCKOUT_SECONDS, LOGIN_MAX_FAILURES
+from rate_limit import clear_bucket, count_hits, record_hit
 from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 
 
@@ -226,12 +229,25 @@ def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = No
 
 @synchronized
 def authenticate_user(email: str, password: str) -> Dict[str, Any]:
-    """Return the user if the email/password combination is valid."""
+    """Return the user if the email/password combination is valid.
+
+    Wrong passwords count against the email (known or not); once there are
+    ``LOGIN_MAX_FAILURES`` in ``LOGIN_LOCKOUT_SECONDS`` every attempt gets 429.
+    A correct password clears the count.
+    """
+    failures = f"login-failures:{normalize_email(email)}"
+    if count_hits(failures, LOGIN_LOCKOUT_SECONDS) >= LOGIN_MAX_FAILURES:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts for this account. Try again later.",
+        )
+    invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     data = load_users()
     idx = _find_user_index(email, data)
     if idx is None:
         _hash_password(password, _DUMMY_SALT_HEX)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        record_hit(failures)
+        raise invalid
     user = data["users"][idx]
     salt_hex = user.get("salt")
     if not salt_hex:
@@ -239,7 +255,9 @@ def authenticate_user(email: str, password: str) -> Dict[str, Any]:
     _, candidate_hash = _hash_password(password, salt_hex)
     stored_hash = user.get("password_hash") or ""
     if not hmac.compare_digest(candidate_hash.encode("utf-8"), stored_hash.encode("utf-8")):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        record_hit(failures)
+        raise invalid
+    clear_bucket(failures)
     if not user.get("email_verified"):
         raise HTTPException(status_code=403, detail="Email is not verified yet")
     user["last_login_at"] = _now_iso()

@@ -147,6 +147,27 @@ def try_acquire(bucket: str, per_minute: int | None, per_day: int | None) -> boo
     return _acquire(bucket, per_minute, per_day) is None
 
 
+def count_hits(bucket: str, window_seconds: float) -> int:
+    """Number of hits recorded in ``bucket`` during the last ``window_seconds``."""
+    with _transaction() as conn:
+        (count,) = conn.execute(
+            "SELECT COUNT(*) FROM hits WHERE bucket = ? AND ts > ?", (bucket, time.time() - window_seconds)
+        ).fetchone()
+    return count
+
+
+def record_hit(bucket: str) -> None:
+    """Record one hit in ``bucket`` without checking any limit."""
+    with _transaction() as conn:
+        conn.execute("INSERT INTO hits (bucket, ts) VALUES (?, ?)", (bucket, time.time()))
+
+
+def clear_bucket(bucket: str) -> None:
+    """Forget every hit recorded in ``bucket``."""
+    with _transaction() as conn:
+        conn.execute("DELETE FROM hits WHERE bucket = ?", (bucket,))
+
+
 def reset() -> None:
     """Forget every hit in every bucket (tests and maintenance)."""
     with _transaction() as conn:
