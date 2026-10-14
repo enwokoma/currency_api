@@ -154,7 +154,7 @@ def clean_state():
     for name in ("webhook_logs.json", "webhook_logs.pretty.json"):
         if os.path.exists(name):
             os.remove(name)
-    rate_limit.request_timestamps.clear()
+    rate_limit.reset()
     yield
 
 

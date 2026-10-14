@@ -4,28 +4,67 @@ Rate limiting logic for the currency conversion service.
 This module tracks requests per bucket (an API key hash, or a route and
 client address for unauthenticated routes) and enforces per‑minute and
 per‑day limits. The numeric limits are passed in by the caller.
+
+Request timestamps live in a SQLite database next to the JSON stores
+(``RATE_LIMIT_DB``, default ``rate_limits.sqlite3``), so every worker process
+on the host shares the same counters and they survive restarts. Each check
+runs in an IMMEDIATE transaction: SQLite's file lock lets only one process at
+a time read a bucket and take a slot, so two workers cannot both take the
+last one.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import os
+import sqlite3
 import threading
 import time
-from typing import Dict, List
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
 from fastapi import HTTPException
 
-# In‑memory store of request timestamps per key. It is per process: it resets
-# on restart and is not shared between workers, so run a single worker.
-request_timestamps: Dict[str, List[float]] = {}
+DB_PATH = os.getenv("RATE_LIMIT_DB", "rate_limits.sqlite3")
 
-# Guards read-modify-write of ``request_timestamps`` across handler threads.
-_LOCK = threading.Lock()
+# Hits older than this are never counted and are deleted.
+RETENTION_SECONDS = 24 * 60 * 60
 
-# Buckets keyed by client address come from unauthenticated traffic, so the
-# ones with no request in the last day are dropped every this many calls.
+# Buckets keyed by client address come from unauthenticated traffic, so hits
+# past the retention window are purged from every bucket this often (calls).
 SWEEP_EVERY = 1000
 _calls_since_sweep = 0
+
+# One connection per process, shared by handler threads under this lock.
+_LOCK = threading.Lock()
+_conn: Optional[sqlite3.Connection] = None
+
+
+def _connection() -> sqlite3.Connection:
+    """Open the shared database on first use (relative to the working directory)."""
+    global _conn
+    if _conn is None:
+        conn = sqlite3.connect(DB_PATH, timeout=10, isolation_level=None, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("CREATE TABLE IF NOT EXISTS hits (bucket TEXT NOT NULL, ts REAL NOT NULL)")
+        conn.execute("CREATE INDEX IF NOT EXISTS hits_bucket_ts ON hits (bucket, ts)")
+        _conn = conn
+    return _conn
+
+
+@contextmanager
+def _transaction() -> Iterator[sqlite3.Connection]:
+    """Run a read-modify-write on the hits table atomically across processes."""
+    with _LOCK:
+        conn = _connection()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
 
 
 def client_bucket(host: str | None) -> str:
@@ -47,10 +86,32 @@ def client_bucket(host: str | None) -> str:
     return str(ip)
 
 
-def _sweep_stale_buckets(now: float) -> None:
-    stale = [key for key, stamps in request_timestamps.items() if not stamps or now - stamps[-1] >= 86400]
-    for key in stale:
-        del request_timestamps[key]
+def _acquire(bucket: str, per_minute: int | None, per_day: int | None) -> Optional[str]:
+    """Take a slot in ``bucket`` unless a limit is reached.
+
+    Returns ``None`` when the slot was taken, else ``"minute"`` or ``"day"``
+    for the limit that refused it. Refused attempts are not recorded.
+    """
+    global _calls_since_sweep
+    now = time.time()
+    with _transaction() as conn:
+        _calls_since_sweep += 1
+        if _calls_since_sweep >= SWEEP_EVERY:
+            _calls_since_sweep = 0
+            conn.execute("DELETE FROM hits WHERE ts <= ?", (now - RETENTION_SECONDS,))
+        conn.execute("DELETE FROM hits WHERE bucket = ? AND ts <= ?", (bucket, now - RETENTION_SECONDS))
+        if per_minute is not None:
+            (recent,) = conn.execute(
+                "SELECT COUNT(*) FROM hits WHERE bucket = ? AND ts > ?", (bucket, now - 60)
+            ).fetchone()
+            if recent >= per_minute:
+                return "minute"
+        if per_day is not None:
+            (today,) = conn.execute("SELECT COUNT(*) FROM hits WHERE bucket = ?", (bucket,)).fetchone()
+            if today >= per_day:
+                return "day"
+        conn.execute("INSERT INTO hits (bucket, ts) VALUES (?, ?)", (bucket, now))
+        return None
 
 
 def allow_request(
@@ -58,45 +119,30 @@ def allow_request(
     per_minute: int,
     per_day: int,
 ) -> None:
-    """Enforce rate limits for a given key (thread-safe wrapper)."""
-    global _calls_since_sweep
-    with _LOCK:
-        _calls_since_sweep += 1
-        if _calls_since_sweep >= SWEEP_EVERY:
-            _calls_since_sweep = 0
-            _sweep_stale_buckets(time.time())
-        _allow_request_locked(key_hash, per_minute, per_day)
-
-
-def _allow_request_locked(
-    key_hash: str,
-    per_minute: int,
-    per_day: int,
-) -> None:
-    """Enforce rate limits for a given key.
+    """Enforce rate limits for a bucket, usually an API key hash.
 
     Args:
-        key_hash: The hash of the API key making the request.
+        key_hash: The bucket to count against.
         per_minute: Number of allowed requests in the last 60 seconds.
         per_day: Number of allowed requests in the last 24 hours.
 
     Raises:
         HTTPException: With status 429 if either limit is exceeded.
     """
-    now = time.time()
-    if key_hash not in request_timestamps:
-        request_timestamps[key_hash] = []
-    timestamps = [t for t in request_timestamps[key_hash] if now - t < 86400]
-    last_minute_count = len([t for t in timestamps if now - t < 60])
-    if per_minute is not None and last_minute_count >= per_minute:
+    refused = _acquire(key_hash, per_minute, per_day)
+    if refused == "minute":
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded (per minute). Please slow down.",
         )
-    if per_day is not None and len(timestamps) >= per_day:
+    if refused == "day":
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded (per day). Please try again later.",
         )
-    timestamps.append(now)
-    request_timestamps[key_hash] = timestamps
+
+
+def reset() -> None:
+    """Forget every hit in every bucket (tests and maintenance)."""
+    with _transaction() as conn:
+        conn.execute("DELETE FROM hits")

@@ -7,6 +7,7 @@
 /usage.json
 /users.json
 /webhook_logs.json
+/rate_limits.sqlite3*
 # Python bytecode and virtualenv
 __pycache__/
 *.pyc

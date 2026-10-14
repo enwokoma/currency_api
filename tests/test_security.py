@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import hmac
+import os
+import subprocess
+import sys
 import time
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import config
@@ -282,7 +287,23 @@ def test_client_buckets_group_ipv6_hosts_and_stale_buckets_are_swept(monkeypatch
     assert bucket("testclient") == "testclient" and bucket(None) == "unknown"
 
     now = time.time()
-    rate_limit.request_timestamps.update({"public:login:old": [now - 90000], "public:login:fresh": [now - 10], "empty": []})
+    db = rate_limit._connection()
+    db.executemany("INSERT INTO hits (bucket, ts) VALUES (?, ?)", [("public:login:old", now - 90000), ("public:login:fresh", now - 10)])
     monkeypatch.setattr(rate_limit, "SWEEP_EVERY", 1)
     rate_limit.allow_request("k", per_minute=5, per_day=5)
-    assert set(rate_limit.request_timestamps) == {"public:login:fresh", "k"}
+    assert {b for (b,) in db.execute("SELECT DISTINCT bucket FROM hits")} == {"public:login:fresh", "k"}
+
+
+def test_rate_limits_are_shared_with_other_processes_and_survive_restarts():
+    def other_process_hit() -> int:
+        code = "import rate_limit; rate_limit.allow_request('shared', per_minute=3, per_day=100)"
+        env = {**os.environ, "PYTHONPATH": helpers.PROJECT_ROOT}
+        return subprocess.run([sys.executable, "-c", code], cwd=os.getcwd(), env=env, capture_output=True).returncode
+
+    rate_limit.allow_request("shared", per_minute=3, per_day=100)
+    rate_limit.allow_request("shared", per_minute=3, per_day=100)
+    assert other_process_hit() == 0, "a fresh process sees two hits and takes the third slot"
+    assert other_process_hit() != 0, "and another fresh process is refused"
+    with pytest.raises(HTTPException) as refused:
+        rate_limit.allow_request("shared", per_minute=3, per_day=100)
+    assert refused.value.status_code == 429, "this process counts the other process's hit"
