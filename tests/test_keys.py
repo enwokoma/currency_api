@@ -128,22 +128,26 @@ def test_session_create_key_free_and_paid(client):
     assert key_record(body["api_key"])["owner"] == user_id
 
     r = client.post("/auth/create-key", headers=headers, json={"tier": "PAID", "email": "second@example.com", "first_name": "S", "last_name": "K"})
-    assert r.status_code == 200
-    assert r.json()["active"] is False and r.json()["subscription_status"] == "pending"
-    rec = key_record(r.json()["api_key"])
-    assert rec["tier"] == "paid" and rec["plan_code"] is None and rec["active"] is False
-
+    assert r.status_code == 400 and "account's email" in r.json()["detail"], "keys use the verified account email"
     assert client.post("/auth/create-key", headers=headers, json={"tier": "gold"}).status_code == 400
     assert client.post("/auth/create-key", headers=headers, json={"tier": "free"}).status_code == 400, "email already tied to a key"
     assert client.post("/auth/create-key", json={"tier": "free"}).status_code == 401
 
+    paid_user = register_and_login(client, "paid-owner@example.com")
+    r = client.post("/auth/create-key", headers=paid_user, json={"tier": "PAID", "email": "Paid-Owner@example.com", "first_name": "S"})
+    assert r.status_code == 200
+    assert r.json()["active"] is False and r.json()["subscription_status"] == "pending"
+    assert r.json()["contact"] == {"email": "paid-owner@example.com", "first_name": "S", "last_name": "Lovelace"}
+    rec = key_record(r.json()["api_key"])
+    assert rec["tier"] == "paid" and rec["plan_code"] is None and rec["active"] is False
+
+    # Further keys join an account by claiming them with the raw key.
+    client.post("/user/keys/claim", headers=headers, json={"api_key": free_key(client, "side-project@example.com")})
     keys = client.get("/user/keys", headers=headers).json()["keys"]
-    assert len(keys) == 2 and {k["tier"] for k in keys} == {"free", "paid"}
+    assert len(keys) == 2 and {k["email"] for k in keys} == {"owner@example.com", "side-project@example.com"}
     assert all(k["key_prefix"].endswith(".") and len(k["key_prefix"]) == 9 for k in keys)
-    summaries = client.get("/user/usage", headers=headers).json()["usage"]
-    assert len(summaries) == 2
-    paid_summary = next(s for s in summaries if s["tier"] == "paid")
-    assert paid_summary["rate_limits"] == {"per_minute": 100, "per_day": 10000}
+    summaries = client.get("/user/usage", headers=paid_user).json()["usage"]
+    assert len(summaries) == 1 and summaries[0]["rate_limits"] == {"per_minute": 100, "per_day": 10000}
 
 
 def test_claim_requires_raw_key_and_never_matches_by_email(client):

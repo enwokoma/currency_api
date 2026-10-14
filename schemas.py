@@ -63,9 +63,8 @@ class ClaimKeyPayload(BaseModel):
 class CreateKeyPayload(BaseModel):
     """Payload for creating an API key for a user.
 
-    Contact fields are optional; when omitted, the current user's
-    profile (email, first_name, last_name) is used so that contact
-    metadata always matches the authenticated user.
+    The key always uses the account's email; ``email`` may be omitted and,
+    if sent, must match it. Names default to the user's profile.
     """
 
     email: Optional[str] = None

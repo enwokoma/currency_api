@@ -212,12 +212,20 @@ def billing_upgrade(
     """Start a Paystack transaction to upgrade a free key to a paid plan.
 
     The caller must supply a ``plan_code`` that exists in ``PLANS``.
-    Contact information is taken from the payload if provided, else
-    from the key record. The API key used for authentication will
-    determine which key is upgraded.
+    Names are taken from the payload if provided, else from the key record.
+    The contact email cannot be changed here: moving a key onto another
+    address would let a key holder reserve, or probe for, emails they do not
+    control. Only a legacy key without an email may set one. The API key
+    used for authentication determines which key is upgraded.
     """
     plan = _get_plan_or_error(payload.plan_code)
-    email = (payload.email or key.get("email") or "").strip().lower()
+    current_email = (key.get("email") or "").strip().lower()
+    requested_email = (payload.email or "").strip().lower()
+    if current_email and requested_email and requested_email != current_email:
+        raise HTTPException(status_code=400, detail="A key's contact email can't be changed.")
+    email = current_email or requested_email
+    if email and not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
     first = payload.first_name or key.get("first_name")
     last = payload.last_name or key.get("last_name")
     if not email or not first or not last:

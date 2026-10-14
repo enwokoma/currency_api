@@ -145,12 +145,22 @@ def create_key(
     payload: CreateKeyPayload,
     user: Dict[str, Any] = Depends(session_required),
 ) -> Dict[str, Any]:
-    """Create a new API key for the current user."""
+    """Create a new API key for the current user.
+
+    The key's contact email is the account's own verified address. Allowing
+    any other address would let users reserve, or probe for, emails they have
+    not shown they control.
+    """
     tier_lower = payload.tier.strip().lower()
-    email_raw = payload.email or user.get("email") or ""
+    account_email = (user.get("email") or "").strip().lower()
+    if payload.email and payload.email.strip().lower() != account_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Keys created from an account use the account's email address.",
+        )
     first_raw = payload.first_name or user.get("first_name") or ""
     last_raw = payload.last_name or user.get("last_name") or ""
-    email, first_name, last_name = _normalize_contact_fields(email_raw, first_raw, last_raw)
+    email, first_name, last_name = _normalize_contact_fields(account_email, first_raw, last_raw)
     if tier_lower not in {"free", "paid"}:
         raise HTTPException(status_code=400, detail="Invalid key tier specified")
     if tier_lower == "free":

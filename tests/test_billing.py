@@ -126,15 +126,22 @@ def test_upgrade_free_key_full_flow(client, paystack):
     assert r.status_code == 200 and key_record(key)["pending_plan_code"] == "BASIC_MONTHLY"
 
 
-def test_upgrade_updates_contact_and_keeps_emails_unique(client):
+def test_upgrade_updates_names_but_never_moves_the_key_to_another_email(client):
     key1 = free_key(client, "one@example.com")
     free_key(client, "two@example.com")
-    r = upgrade(client, key1, "BASIC_MONTHLY", email="two@example.com", first_name="A", last_name="B")
-    assert r.status_code == 400 and "already associated" in r.json()["detail"]
-    r = upgrade(client, key1, "BASIC_MONTHLY", email="Three@Example.com", first_name="Tre", last_name="Uno")
+    for other in ("two@example.com", "Three@Example.com"):
+        r = upgrade(client, key1, "BASIC_MONTHLY", email=other, first_name="A", last_name="B")
+        assert r.status_code == 400 and "can't be changed" in r.json()["detail"], other
+    r = upgrade(client, key1, "BASIC_MONTHLY", email="ONE@example.com", first_name="Tre", last_name="Uno")
     assert r.status_code == 200
     rec = key_record(key1)
-    assert rec["email"] == "three@example.com" and rec["first_name"] == "Tre"
+    assert rec["email"] == "one@example.com" and rec["first_name"] == "Tre"
+
+    legacy = free_key(client, "legacy-email@example.com")
+    patch_key(legacy, email=None)
+    assert upgrade(client, legacy, "BASIC_MONTHLY", email="not-an-email").status_code == 400
+    assert upgrade(client, legacy, "BASIC_MONTHLY", email="New@Example.com").status_code == 200
+    assert key_record(legacy)["email"] == "new@example.com", "a key with no email may set one"
 
 
 def test_upgrade_by_key_prefix_needs_an_owning_session(client):

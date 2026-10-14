@@ -47,15 +47,34 @@ def test_duplicate_email_errors_do_not_reveal_the_key_hash(client, paystack):
     # Any caller holding a public free key can try to move its contact email onto the victim's.
     attacker_key = free_key(client, "attacker@example.com")
     r = upgrade(client, attacker_key, "BASIC_MONTHLY", email="victim@example.com", first_name="M", last_name="X")
-    assert r.status_code == 400 and "already associated" in r.json()["detail"]
-    assert victim_hash[:4] not in r.text
+    assert r.status_code == 400 and victim_hash[:4] not in r.text
 
     # Any logged-in user can ask /auth/create-key for the victim's email.
     session = register_and_login(client, "mallory@example.com")
     for tier in ("free", "paid"):
         r = client.post("/auth/create-key", headers=session, json={"tier": tier, "email": "victim@example.com"})
-        assert r.status_code == 400 and "already associated" in r.json()["detail"]
-        assert victim_hash[:4] not in r.text, tier
+        assert r.status_code == 400 and victim_hash[:4] not in r.text, tier
+
+
+def test_keys_cannot_be_bound_to_an_email_the_caller_does_not_control(client):
+    taken = free_key(client, "taken@example.com")
+    attacker_key = free_key(client, "attacker@example.com")
+    session = register_and_login(client, "mallory@example.com")
+
+    # Asking about a taken and a free address gives the same answer, so neither route
+    # tells the caller which addresses have keys, and neither reserves an address.
+    for route in ("upgrade", "create-key"):
+        answers = []
+        for email in ("taken@example.com", "unclaimed@example.com"):
+            if route == "upgrade":
+                r = upgrade(client, attacker_key, "BASIC_MONTHLY", email=email, first_name="M", last_name="X")
+            else:
+                r = client.post("/auth/create-key", headers=session, json={"tier": "free", "email": email})
+            answers.append((r.status_code, r.text))
+        assert answers[0] == answers[1] and answers[0][0] == 400, route
+    assert key_record(attacker_key)["email"] == "attacker@example.com"
+    assert key_record(taken)["email"] == "taken@example.com"
+    assert {r["email"] for r in read_store("keys.json")["keys"]} == {"taken@example.com", "attacker@example.com"}
 
 
 def test_hash_prefix_alone_cannot_drive_billing(client, paystack):
@@ -112,7 +131,7 @@ def test_session_owner_can_run_billing_for_its_key_by_prefix(client, paystack):
 def test_session_prefix_must_name_exactly_one_owned_key(client):
     session = register_and_login(client, "two@example.com")
     client.post("/auth/create-key", headers=session, json={"tier": "free"})
-    client.post("/auth/create-key", headers=session, json={"tier": "free", "email": "two-b@example.com"})
+    client.post("/user/keys/claim", headers=session, json={"api_key": free_key(client, "two-b@example.com")})
     data = read_store("keys.json")
     data["keys"][0]["key_hash"] = "aaaa1111" + "0" * 56
     data["keys"][1]["key_hash"] = "aaaa2222" + "0" * 56
