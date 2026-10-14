@@ -22,19 +22,23 @@ from helpers import (
 
 def test_public_free_key_lifecycle(client):
     r = client.post("/auth/free-key", json={"email": " Free.User@Example.com", "first_name": " Free ", "last_name": "User"})
-    assert r.status_code == 200
-    key = r.json()["api_key"]
-    assert key.startswith("free_") and r.json()["tier"] == "free"
+    assert r.status_code == 202 and r.json()["tier"] == "free" and "api_key" not in r.json()
+    key = helpers.api_key_from_email("free.user@example.com")
+    assert key.startswith("free_") and key not in r.text
     rec = key_record(key)
     assert rec["email"] == "free.user@example.com" and rec["first_name"] == "Free"
     assert rec["tier"] == "free" and rec["credits"] is None and rec["subscription_status"] == "free"
     assert rec["owner"] == "free.user@example.com"
     assert isinstance(rec["created_at"], float) and isinstance(rec["credits_reset_at"], float)
 
-    r = client.post("/auth/free-key", json={"email": "FREE.USER@example.com", "first_name": "X", "last_name": "Y"})
-    assert r.status_code == 400 and "already exists" in r.json()["detail"]
+    again = client.post("/auth/free-key", json={"email": "FREE.USER@example.com", "first_name": "X", "last_name": "Y"})
+    assert again.status_code == 202 and again.json() == r.json(), "a second request looks exactly like the first"
+    assert helpers.last_email_to("free.user@example.com")["Subject"] == "You already have an API key"
+    assert len(read_store("keys.json")["keys"]) == 1
     r = client.post("/auth/free-key", json={"email": "n@example.com", "first_name": "", "last_name": "Y"})
     assert r.status_code == 400
+    r = client.post("/auth/free-key", json={"email": "not-an-email", "first_name": "N", "last_name": "Y"})
+    assert r.status_code == 400 and read_store("keys.json")["keys"][0]["email"] == "free.user@example.com"
 
     assert rate_call(client, key).status_code == 200
     assert key_record(key)["credits"] == 199

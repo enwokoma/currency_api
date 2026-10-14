@@ -145,10 +145,16 @@ def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:
 
 
 # --------------------------------------------------------------------------- keys
+def api_key_from_email(email: str) -> str:
+    """The API key in the latest email sent to ``email``."""
+    body = last_email_to(email).get_content()
+    return re.search(r"^API key: (\S+)$", body, re.M).group(1)
+
+
 def free_key(client, email: str, first="Free", last="User") -> str:
     r = client.post("/auth/free-key", json={"email": email, "first_name": first, "last_name": last})
-    assert r.status_code == 200, r.text
-    return r.json()["api_key"]
+    assert r.status_code == 202, r.text
+    return api_key_from_email(email)
 
 
 def admin_key(client, owner: str, email: str, plan_code=None, activate=True, first="Admin", last="User") -> str:

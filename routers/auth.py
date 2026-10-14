@@ -8,8 +8,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 
 from credential_utils import header_credential
 from dependencies import public_route_limit
+from billing_helpers import _normalize_contact_fields
 from mailer import valid_address
-from notifications import send_account_exists, send_verification
+from notifications import send_account_exists, send_api_key, send_key_exists, send_verification
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
     FreeKeyPayload,
@@ -31,29 +32,45 @@ from services.user_service import (
 auth_router = APIRouter()
 
 
+def _issue_free_key(email: str, first_name: str, last_name: str) -> None:
+    """Background half of /auth/free-key: create and email the key, or a notice."""
+    if find_key_by_email(email, include_inactive=True, include_revoked=True):
+        send_key_exists(email)
+        return
+    try:
+        raw = generate_free_key(
+            owner=email, email=email, first_name=first_name, last_name=last_name
+        )
+    except HTTPException:
+        # Lost a race with a concurrent request for the same address.
+        send_key_exists(email)
+        return
+    send_api_key(email, raw, "free")
+
+
 @auth_router.post(
     "/auth/free-key",
     tags=["Auth"],
+    status_code=202,
     dependencies=[Depends(public_route_limit("free-key"))],
 )
-def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
-    """Public endpoint to request a free-tier API key."""
-    email_norm = payload.email.strip().lower()
-    existing = find_key_by_email(email_norm, include_inactive=True, include_revoked=True)
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="A key already exists for this email. Please check your inbox or use /auth/register to manage keys.",
-        )
-    raw = generate_free_key(
-        owner=email_norm,
-        email=email_norm,
-        first_name=payload.first_name,
-        last_name=payload.last_name,
+def get_free_key(payload: FreeKeyPayload, background: BackgroundTasks) -> Dict[str, str]:
+    """Email a free-tier API key to the address given.
+
+    The key goes only to that inbox, so nobody can take a key out in someone
+    else's name. The answer is identical, and is sent before any lookup, for
+    addresses with and without a key; the owner of an existing key gets a
+    notice instead of a second key.
+    """
+    email, first_name, last_name = _normalize_contact_fields(
+        payload.email, payload.first_name, payload.last_name
     )
+    if not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    background.add_task(_issue_free_key, email, first_name, last_name)
     return {
         "tier": "free",
-        "api_key": raw,
+        "message": "Check your inbox. The key has been emailed to this address.",
         "note": "Free keys have limited quota. Upgrade for higher limits.",
     }
 

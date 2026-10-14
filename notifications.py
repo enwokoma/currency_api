@@ -35,6 +35,37 @@ def send_verification(email: str, verification: Dict[str, Any]) -> bool:
     return send_email(email, "Verify your email address", "\n".join(lines))
 
 
+def send_api_key(email: str, raw_key: str, tier: str) -> bool:
+    """Email a newly issued API key to its contact address."""
+    body = "\n".join(
+        [
+            f"Here is your {tier}-tier API key:",
+            "",
+            f"API key: {raw_key}",
+            "",
+            "Send it in the X-API-KEY header. Keep it secret: it is shown only in this email.",
+            "To manage the key from an account, register and attach it with POST /user/keys/claim.",
+        ]
+    )
+    return send_email(email, "Your API key", body)
+
+
+def send_key_exists(email: str) -> bool:
+    """Tell the owner of ``email`` that a new key was requested for it."""
+    body = "\n".join(
+        [
+            "Someone asked for an API key for this email address, but it already has one,",
+            "so no new key was issued.",
+            "",
+            "If it was you, keep using your existing key. If you lost it and it is attached to",
+            "an account, sign in and rotate it with POST /user/keys/regenerate-by-prefix.",
+            "",
+            "If it wasn't you, you can ignore this email. Your key has not changed.",
+        ]
+    )
+    return send_email(email, "You already have an API key", body)
+
+
 def send_account_exists(email: str) -> bool:
     """Tell the owner of ``email`` that someone tried to register it again."""
     body = "\n".join(

@@ -381,3 +381,17 @@ def test_repeated_wrong_passwords_lock_the_account_for_a_while(client, monkeypat
     later = time.time() + config.LOGIN_LOCKOUT_SECONDS + 1
     monkeypatch.setattr(rate_limit.time, "time", lambda: later)
     assert login("locked@example.com", PASSWORD).status_code == 200, "the lock lifts once failures age out"
+
+
+def test_free_keys_go_only_to_the_inbox(client):
+    victim_key = free_key(client, "owner-of-inbox@example.com")
+
+    # Asking for a key in someone else's name hands the caller nothing.
+    fresh = client.post("/auth/free-key", json={"email": "someone-else@example.com", "first_name": "M", "last_name": "X"})
+    taken = client.post("/auth/free-key", json={"email": "owner-of-inbox@example.com", "first_name": "M", "last_name": "X"})
+    assert fresh.status_code == taken.status_code == 202 and fresh.text == taken.text
+    issued = helpers.api_key_from_email("someone-else@example.com")
+    assert issued not in fresh.text, "the new key reached only its inbox"
+    assert helpers.last_email_to("owner-of-inbox@example.com")["Subject"] == "You already have an API key"
+    assert victim_key not in helpers.last_email_to("owner-of-inbox@example.com").get_content()
+    assert len(read_store("keys.json")["keys"]) == 2
