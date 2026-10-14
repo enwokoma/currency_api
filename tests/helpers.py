@@ -37,6 +37,8 @@ from services.auth_service import hash_key  # noqa: E402
 from storage_utils import atomic_write_json  # noqa: E402
 
 ADMIN = {"X-ADMIN-TOKEN": ADMIN_TOKEN}
+# Every email the app sends during a test (conftest routes mailer delivery here).
+OUTBOX: list = []
 PASSWORD = "StrongPass123"
 STORES = {
     "keys.json": "keys",
@@ -86,6 +88,17 @@ def patch_transaction(reference: str, **fields: Any) -> None:
             write_store("transactions.json", data)
             return
     raise AssertionError("transaction not found")
+
+
+# --------------------------------------------------------------------------- mail
+def emails_to(address: str) -> list:
+    return [m for m in OUTBOX if m["To"] == address.strip().lower()]
+
+
+def last_email_to(address: str):
+    sent = emails_to(address)
+    assert sent, f"no email was sent to {address}"
+    return sent[-1]
 
 
 # --------------------------------------------------------------------------- users

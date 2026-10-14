@@ -142,6 +142,11 @@ def allow_request(
         )
 
 
+def try_acquire(bucket: str, per_minute: int | None, per_day: int | None) -> bool:
+    """Like ``allow_request`` but returns False instead of raising."""
+    return _acquire(bucket, per_minute, per_day) is None
+
+
 def reset() -> None:
     """Forget every hit in every bucket (tests and maintenance)."""
     with _transaction() as conn:

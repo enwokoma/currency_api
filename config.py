@@ -73,6 +73,21 @@ DEV_RETURN_VERIFICATION_CODES = os.getenv("DEV_RETURN_VERIFICATION_CODES", "").s
 }
 
 
+# Outgoing email (see mailer.py). MAIL_BACKEND is "smtp" (default) or
+# "console"; console prints messages, secrets included, to stdout and is for
+# local development only.
+MAIL_BACKEND = os.getenv("MAIL_BACKEND", "smtp").strip().lower()
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_SECURITY = os.getenv("SMTP_SECURITY", "starttls").strip().lower()  # starttls | ssl | none
+SMTP_PORT = int(os.getenv("SMTP_PORT") or (465 if SMTP_SECURITY == "ssl" else 587))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip()
+SMTP_TIMEOUT_SECONDS = 15
+# At most this many messages per recipient address (per minute, per day), so
+# public endpoints that send mail cannot be used to flood someone's inbox.
+MAIL_PER_RECIPIENT_LIMITS = (3, 20)
+
 def parse_cors_origins(raw: Optional[str]) -> List[str]:
     """Split a comma-separated origin list; unset or blank means any origin."""
     origins = [origin.strip() for origin in (raw or "").split(",") if origin.strip()]

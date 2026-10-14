@@ -56,7 +56,8 @@ from fastapi.responses import JSONResponse, HTMLResponse  # noqa: F401
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
 import env  # noqa: F401  # loads .env before any os.getenv lookups
-from config import CORS_ALLOW_ORIGINS
+import mailer
+from config import CORS_ALLOW_ORIGINS, MAIL_BACKEND
 from dependencies import api_key_auth_only
 from routers.admin import admin_router
 from routers.auth import auth_router
@@ -91,11 +92,15 @@ class PrettyJSONResponse(JSONResponse):
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
-    """Refresh the Postman collection from the live schema on startup."""
+    """Refresh the Postman collection and check mail settings on startup."""
     try:
         export_postman_collection(fastapi_app)
     except Exception as exc:
         print(f"[postman-export] Failed to refresh collection: {exc}")
+    if MAIL_BACKEND == "console":
+        print("[mail] WARNING: MAIL_BACKEND=console prints every email, secrets included, to stdout. Local development only.")
+    elif not mailer.is_configured():
+        print("[mail] WARNING: email is not configured (set SMTP_HOST and SMTP_FROM). Messages to users will not be delivered.")
     yield
 
 
