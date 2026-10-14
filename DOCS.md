@@ -107,7 +107,38 @@ This is the link format used in verification emails.
 }
 ```
 
-> Wrong password and unknown email both return HTTP 401 `Invalid credentials` and take the same time. After 10 wrong passwords for one email within 15 minutes, every password check for that email (login and the password confirmations on `/user/keys/*`) returns HTTP 429 until the failures age out. Unknown emails are locked the same way.
+> Wrong password and unknown email both return HTTP 401 `Invalid credentials` and take the same time. After 10 wrong passwords for one email within 15 minutes, every password check for that email (login and the password confirmations on `/user/keys/*`) returns HTTP 429 until the failures age out. Unknown emails are locked the same way. Forgot your password? Use the reset flow below.
+
+### Forgot password - `POST /auth/forgot-password`
+```json
+{
+  "email": "ada@example.com"
+}
+```
+**Response 202**
+```json
+{
+  "message": "If this address has an account, a reset token is on its way."
+}
+```
+> The same answer is given for every address. An account gets an email with a `Reset token: reset_...` line. The token works once, expires in 30 minutes, and requesting another replaces it. Only its hash is stored.
+
+### Reset password - `POST /auth/reset-password`
+```json
+{
+  "email": "ada@example.com",
+  "token": "reset_...",
+  "new_password": "BrandNewPass456",
+  "confirm_password": "BrandNewPass456"
+}
+```
+**Response 200**
+```json
+{
+  "message": "Password updated. Every session was signed out; sign in with the new password."
+}
+```
+> Password rules (at least 8 characters, matching confirmation) are checked first and return HTTP 400 without spending the token. Any other failure (unknown address, no pending reset, wrong or expired token) returns the same HTTP 400 `Invalid or expired reset token...`. On success every session of the user is revoked, the sign-in lockout for the address is lifted, an unverified address becomes verified (the token proves the inbox), and a "Your password was changed" email is sent.
 
 ### Current user - `GET /user`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
@@ -717,6 +748,8 @@ This is the link format used in verification emails.
 | `POST`/`GET /auth/verify-email` (shared) | 10 | 100 |
 | `POST /auth/resend-verification` | 3 | 30 |
 | `POST /billing/subscribe` | 5 | 50 |
+| `POST /auth/forgot-password` | 3 | 30 |
+| `POST /auth/reset-password` | 10 | 100 |
 
 IPv6 clients are counted per /64. Behind a reverse proxy, run uvicorn with `--proxy-headers` so the client address is the caller's, not the proxy's. Counters live in SQLite (`rate_limits.sqlite3`), so every worker process shares them and they survive restarts.
 
