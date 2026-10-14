@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hmac
+
 from helpers import (
+    ADMIN,
+    PASSWORD,
     activate_via_webhook,
     free_key,
     hash_key,
@@ -103,3 +107,41 @@ def test_session_prefix_must_name_exactly_one_owned_key(client):
     r = client.get("/transactions", headers={**session, "X-API-KEY-PREFIX": "aaaa"})
     assert r.status_code == 400 and "more than one" in r.json()["detail"]
     assert client.get("/transactions", headers={**session, "X-API-KEY-PREFIX": "aaaa2"}).status_code == 200
+
+
+def _spy_compare_digest(monkeypatch):
+    calls = []
+    real = hmac.compare_digest
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    return calls
+
+
+def test_admin_token_is_compared_in_constant_time(client, monkeypatch):
+    calls = _spy_compare_digest(monkeypatch)
+    assert client.get("/admin/keys", headers={"X-ADMIN-TOKEN": "wrong"}).status_code == 403
+    assert client.get("/admin/keys", headers=ADMIN).status_code == 200
+    assert (b"wrong", ADMIN["X-ADMIN-TOKEN"].encode()) in calls
+    assert (ADMIN["X-ADMIN-TOKEN"].encode(), ADMIN["X-ADMIN-TOKEN"].encode()) in calls
+    r = client.get("/admin/keys", headers={"X-ADMIN-TOKEN": "t\xe9st".encode("latin-1")})
+    assert r.status_code == 403, "a non-ASCII token is a mismatch, not a server error"
+    assert client.get("/admin/keys").status_code == 403
+
+
+def test_password_hash_is_compared_in_constant_time(client, monkeypatch):
+    register_and_login(client, "pw@example.com")
+    stored = read_store("users.json")["users"][0]["password_hash"].encode()
+    calls = _spy_compare_digest(monkeypatch)
+    login = lambda pw: client.post("/auth/login", json={"email": "pw@example.com", "password": pw})  # noqa: E731
+    assert login("wrong-password").status_code == 401
+    assert login(PASSWORD).status_code == 200
+    assert len(calls) == 2 and all(stored_arg == stored for _, stored_arg in calls)
+
+    data = read_store("users.json")
+    data["users"][0]["password_hash"] = None
+    write_store("users.json", data)
+    assert login(PASSWORD).status_code == 401, "a record without a hash refuses the login"

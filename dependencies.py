@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Dict, Any
 
 from fastapi import HTTPException, Request
@@ -109,6 +110,9 @@ def admin_required(request: Request) -> bool:
     """Validate the admin token for protected admin endpoints."""
     provided = request.headers.get("X-ADMIN-TOKEN") or request.query_params.get("admin_token")
     expected = get_expected_admin_token()
-    if provided != expected:
+    # Constant-time comparison, on bytes so a non-ASCII header is a plain mismatch.
+    if not provided or not expected or not hmac.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=403, detail="Invalid admin token")
     return True

@@ -10,6 +10,7 @@ call from FastAPI endpoints.
 
 from __future__ import annotations
 
+import hmac
 import secrets
 import time
 import uuid
@@ -205,7 +206,8 @@ def authenticate_user(email: str, password: str) -> Dict[str, Any]:
     if not salt_hex:
         raise HTTPException(status_code=500, detail="User salt is missing")
     _, candidate_hash = _hash_password(password, salt_hex)
-    if candidate_hash != user.get("password_hash"):
+    stored_hash = user.get("password_hash") or ""
+    if not hmac.compare_digest(candidate_hash.encode("utf-8"), stored_hash.encode("utf-8")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.get("email_verified"):
         raise HTTPException(status_code=403, detail="Email is not verified yet")
