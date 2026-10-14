@@ -102,10 +102,17 @@ def register(client, email: str, first="Ada", last="Lovelace", password=PASSWORD
     )
 
 
+def verification_for(email: str) -> Dict[str, Any]:
+    """The pending verification challenge, as the user's inbox would receive it."""
+    email_norm = email.strip().lower()
+    user = next(u for u in read_store("users.json")["users"] if u["email"] == email_norm)
+    return user["verification"]
+
+
 def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:
     r = register(client, email, **kwargs)
     assert r.status_code == 201, r.text
-    otp = r.json()["verification"]["otp"]
+    otp = verification_for(email)["otp"]
     r = client.post("/auth/verify-email", json={"email": email, "otp": otp})
     assert r.status_code == 200, r.text
     r = client.post("/auth/login", json={"email": email, "password": kwargs.get("password", PASSWORD)})

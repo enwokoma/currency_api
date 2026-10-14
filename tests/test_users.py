@@ -5,22 +5,23 @@ from __future__ import annotations
 import time
 
 import helpers
-from helpers import PASSWORD, read_store, register, register_and_login, write_store
+from helpers import PASSWORD, read_store, register, register_and_login, verification_for, write_store
 
 
-def test_register_normalises_email_and_returns_verification(client):
+def test_register_normalises_email_and_keeps_codes_out_of_the_response(client):
     r = register(client, " Ada@Example.COM ")
     assert r.status_code == 201
     body = r.json()
     assert body["user"]["email"] == "ada@example.com"
     assert body["user"]["email_verified"] is False
     assert not {"password_hash", "salt", "verification"} & set(body["user"])
-    v = body["verification"]
-    assert len(v["otp"]) == 6 and v["otp"].isdigit()
-    assert v["token"].startswith("verify_")
-    assert v["expires_at"] > time.time()
+    assert set(body["verification"]) == {"expires_at"} and body["verification"]["expires_at"] > time.time()
     stored = read_store("users.json")["users"][0]
     assert stored["password_hash"] != PASSWORD and len(stored["salt"]) == 32
+    v = stored["verification"]
+    assert len(v["otp"]) == 6 and v["otp"].isdigit()
+    assert v["token"].startswith("verify_")
+    assert v["otp"] not in r.text and v["token"] not in r.text
 
 
 def test_register_validation(client):
@@ -32,7 +33,8 @@ def test_register_validation(client):
 
 
 def test_verify_email_requires_exactly_one_credential(client):
-    v = register(client, "v@example.com").json()["verification"]
+    register(client, "v@example.com")
+    v = verification_for("v@example.com")
     post = lambda **body: client.post("/auth/verify-email", json={"email": "v@example.com", **body})  # noqa: E731
     assert post(otp=v["otp"], token=v["token"]).status_code == 400
     assert post().status_code == 400
@@ -47,7 +49,8 @@ def test_verify_email_requires_exactly_one_credential(client):
 
 
 def test_verify_email_via_link(client):
-    v = register(client, "link@example.com").json()["verification"]
+    register(client, "link@example.com")
+    v = verification_for("link@example.com")
     assert client.get("/auth/verify-email", params={"email": "link@example.com", "token": "verify_x"}).status_code == 400
     assert client.get("/auth/verify-email", params={"email": "link@example.com"}).status_code == 422
     r = client.get("/auth/verify-email", params={"email": "LINK@example.com", "token": v["token"]})
@@ -55,7 +58,8 @@ def test_verify_email_via_link(client):
 
 
 def test_expired_verification_code_is_rejected_and_resend_recovers(client):
-    v = register(client, "exp@example.com").json()["verification"]
+    register(client, "exp@example.com")
+    v = verification_for("exp@example.com")
     data = read_store("users.json")
     data["users"][0]["verification"]["expires_at"] = time.time() - 1
     write_store("users.json", data)
@@ -64,8 +68,9 @@ def test_expired_verification_code_is_rejected_and_resend_recovers(client):
 
     r = client.post("/auth/resend-verification", json={"email": "exp@example.com"})
     assert r.status_code == 200
-    fresh = r.json()["verification"]
+    fresh = verification_for("exp@example.com")
     assert fresh["token"] != v["token"] and fresh["expires_at"] > time.time()
+    assert r.json()["verification"] == {"expires_at": fresh["expires_at"]}
     assert client.post("/auth/verify-email", json={"email": "exp@example.com", "otp": fresh["otp"]}).status_code == 200
 
 
@@ -80,7 +85,8 @@ def test_login_paths(client):
     register(client, "log@example.com")
     login = lambda pw="StrongPass123", email="log@example.com": client.post("/auth/login", json={"email": email, "password": pw})  # noqa: E731
     assert login().status_code == 403, "unverified users cannot log in"
-    otp = client.post("/auth/resend-verification", json={"email": "log@example.com"}).json()["verification"]["otp"]
+    client.post("/auth/resend-verification", json={"email": "log@example.com"})
+    otp = verification_for("log@example.com")["otp"]
     client.post("/auth/verify-email", json={"email": "log@example.com", "otp": otp})
     assert login(pw="wrong-password").status_code == 401
     assert login(email="nobody@example.com").status_code == 401

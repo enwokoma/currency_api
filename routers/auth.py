@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Query
 
+from config import DEV_RETURN_VERIFICATION_CODES
 from credential_utils import header_credential
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
@@ -26,6 +27,20 @@ from services.user_service import (
 )
 
 auth_router = APIRouter()
+
+
+def _verification_view(verification: Dict[str, Any]) -> Dict[str, Any]:
+    """The part of a verification challenge the API caller may see.
+
+    The OTP and link token prove control of the inbox, so they must reach
+    the user by email only. ``DEV_RETURN_VERIFICATION_CODES`` echoes them
+    for local development without a mailer.
+    """
+    view: Dict[str, Any] = {"expires_at": verification.get("expires_at")}
+    if DEV_RETURN_VERIFICATION_CODES:
+        view["otp"] = verification.get("otp")
+        view["token"] = verification.get("token")
+    return view
 
 
 @auth_router.post("/auth/free-key", tags=["Auth"])
@@ -66,11 +81,7 @@ def register_user(payload: RegisterPayload) -> Dict[str, Any]:
     return {
         "message": "User registered successfully. Please verify your email.",
         "user": sanitize_user(user_rec),
-        "verification": {
-            "otp": verification.get("otp"),
-            "token": verification.get("token"),
-            "expires_at": verification.get("expires_at"),
-        },
+        "verification": _verification_view(verification),
     }
 
 
@@ -80,11 +91,7 @@ def resend_verification(payload: ResendVerificationPayload) -> Dict[str, Any]:
     verification = start_verification(payload.email.strip().lower())
     return {
         "message": "Verification code has been resent.",
-        "verification": {
-            "otp": verification.get("otp"),
-            "token": verification.get("token"),
-            "expires_at": verification.get("expires_at"),
-        },
+        "verification": _verification_view(verification),
     }
 
 

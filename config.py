@@ -46,6 +46,16 @@ FREE_REQUESTS_PER_MINUTE = 10
 FREE_REQUESTS_PER_DAY = 200
 FREE_TIER_MONTHLY_CREDITS = 200
 
+# Local development only: echo email verification codes (OTP and link token)
+# in the /auth/register and /auth/resend-verification responses, for setups
+# with no mailer. Never enable it on a reachable deployment: anyone could then
+# verify any email address they register.
+DEV_RETURN_VERIFICATION_CODES = os.getenv("DEV_RETURN_VERIFICATION_CODES", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 # Default paid limits for keys that are tier='paid' but have no plan_code
 # These limits are applied to admin-generated keys and any paid key that
 # is not yet subscribed to a plan. They reflect the baseline of our

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 
+import routers.auth
 from helpers import (
     ADMIN,
     PASSWORD,
@@ -12,10 +13,12 @@ from helpers import (
     hash_key,
     key_record,
     read_store,
+    register,
     register_and_login,
     subscribe,
     transactions_for,
     upgrade,
+    verification_for,
     write_store,
 )
 
@@ -166,3 +169,26 @@ def test_credentials_are_refused_in_the_query_string(client):
 
     # A header wins; an unrelated query string is not a credential.
     assert client.get("/usage", headers={"X-API-KEY": key}, params={"page": 1}).status_code == 200
+
+
+def test_verification_codes_never_reach_the_caller(client):
+    # Registering someone else's address must not hand back the code that proves the inbox.
+    r = register(client, "inbox-owner@example.com")
+    v = verification_for("inbox-owner@example.com")
+    assert r.status_code == 201 and v["otp"] not in r.text and v["token"] not in r.text
+
+    r = client.post("/auth/resend-verification", json={"email": "inbox-owner@example.com"})
+    fresh = verification_for("inbox-owner@example.com")
+    assert r.status_code == 200 and fresh["otp"] not in r.text and fresh["token"] not in r.text
+
+    login = client.post("/auth/login", json={"email": "inbox-owner@example.com", "password": PASSWORD})
+    assert login.status_code == 403, "the account stays unverified"
+
+
+def test_dev_flag_echoes_verification_codes(client, monkeypatch):
+    monkeypatch.setattr(routers.auth, "DEV_RETURN_VERIFICATION_CODES", True)
+    r = register(client, "dev@example.com")
+    stored = verification_for("dev@example.com")
+    assert r.json()["verification"] == {k: stored[k] for k in ("otp", "token", "expires_at")}
+    r = client.post("/auth/resend-verification", json={"email": "dev@example.com"})
+    assert r.json()["verification"]["otp"] == verification_for("dev@example.com")["otp"]
