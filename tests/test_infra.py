@@ -68,7 +68,7 @@ def test_corrupt_store_is_backed_up_and_reset(client):
 
 def test_empty_store_is_reinitialised(client):
     open("users.json", "w", encoding="utf-8").close()
-    assert helpers.register(client, "empty@example.com").status_code == 201
+    assert helpers.register(client, "empty@example.com").status_code == 202
 
 
 def test_atomic_writes_leave_no_temp_files(client):
@@ -100,7 +100,9 @@ def test_webhook_log_is_ndjson_and_beautifier_writes_separate_file(client):
     assert send_webhook(client, "transfer.success", {"x": 1}).status_code == 200
     with open("webhook_logs.json", encoding="utf-8") as fh:
         raw = fh.read()
-    assert len(raw.strip().splitlines()) == 2, "every delivery is logged, valid signature or not"
+    lines = [json.loads(line) for line in raw.strip().splitlines()]
+    assert len(lines) == 2, "every delivery leaves a line"
+    assert lines[0]["rejected"] == "invalid signature" and "body" not in lines[0], "an unsigned body is never stored"
 
     import beautify_logs
 

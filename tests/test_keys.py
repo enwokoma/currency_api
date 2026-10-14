@@ -22,19 +22,23 @@ from helpers import (
 
 def test_public_free_key_lifecycle(client):
     r = client.post("/auth/free-key", json={"email": " Free.User@Example.com", "first_name": " Free ", "last_name": "User"})
-    assert r.status_code == 200
-    key = r.json()["api_key"]
-    assert key.startswith("free_") and r.json()["tier"] == "free"
+    assert r.status_code == 202 and r.json()["tier"] == "free" and "api_key" not in r.json()
+    key = helpers.api_key_from_email("free.user@example.com")
+    assert key.startswith("free_") and key not in r.text
     rec = key_record(key)
     assert rec["email"] == "free.user@example.com" and rec["first_name"] == "Free"
     assert rec["tier"] == "free" and rec["credits"] is None and rec["subscription_status"] == "free"
     assert rec["owner"] == "free.user@example.com"
     assert isinstance(rec["created_at"], float) and isinstance(rec["credits_reset_at"], float)
 
-    r = client.post("/auth/free-key", json={"email": "FREE.USER@example.com", "first_name": "X", "last_name": "Y"})
-    assert r.status_code == 400 and "already exists" in r.json()["detail"]
+    again = client.post("/auth/free-key", json={"email": "FREE.USER@example.com", "first_name": "X", "last_name": "Y"})
+    assert again.status_code == 202 and again.json() == r.json(), "a second request looks exactly like the first"
+    assert helpers.last_email_to("free.user@example.com")["Subject"] == "You already have an API key"
+    assert len(read_store("keys.json")["keys"]) == 1
     r = client.post("/auth/free-key", json={"email": "n@example.com", "first_name": "", "last_name": "Y"})
     assert r.status_code == 400
+    r = client.post("/auth/free-key", json={"email": "not-an-email", "first_name": "N", "last_name": "Y"})
+    assert r.status_code == 400 and read_store("keys.json")["keys"][0]["email"] == "free.user@example.com"
 
     assert rate_call(client, key).status_code == 200
     assert key_record(key)["credits"] == 199
@@ -88,10 +92,12 @@ def test_free_credits_exhaust_then_reset_monthly(client):
     assert rec["credits_reset_at"] > time.time() + 29 * 24 * 3600
 
 
-def test_key_may_be_passed_as_query_parameter(client):
+def test_key_in_query_parameter_is_refused(client):
     key = free_key(client, "qp@example.com")
     r = client.post("/rate", params={"api_key": key}, json={"from_currency": "USD", "to_currency": "NGN"})
-    assert r.status_code == 200
+    assert r.status_code == 401 and "X-API-KEY header" in r.json()["detail"]
+    assert client.get("/docs", params={"api_key": key}).status_code == 401
+    assert key_record(key)["credits"] is None, "a refused call is not charged"
 
 
 def test_missing_invalid_revoked_and_pending_keys(client):
@@ -122,22 +128,26 @@ def test_session_create_key_free_and_paid(client):
     assert key_record(body["api_key"])["owner"] == user_id
 
     r = client.post("/auth/create-key", headers=headers, json={"tier": "PAID", "email": "second@example.com", "first_name": "S", "last_name": "K"})
-    assert r.status_code == 200
-    assert r.json()["active"] is False and r.json()["subscription_status"] == "pending"
-    rec = key_record(r.json()["api_key"])
-    assert rec["tier"] == "paid" and rec["plan_code"] is None and rec["active"] is False
-
+    assert r.status_code == 400 and "account's email" in r.json()["detail"], "keys use the verified account email"
     assert client.post("/auth/create-key", headers=headers, json={"tier": "gold"}).status_code == 400
     assert client.post("/auth/create-key", headers=headers, json={"tier": "free"}).status_code == 400, "email already tied to a key"
     assert client.post("/auth/create-key", json={"tier": "free"}).status_code == 401
 
+    paid_user = register_and_login(client, "paid-owner@example.com")
+    r = client.post("/auth/create-key", headers=paid_user, json={"tier": "PAID", "email": "Paid-Owner@example.com", "first_name": "S"})
+    assert r.status_code == 200
+    assert r.json()["active"] is False and r.json()["subscription_status"] == "pending"
+    assert r.json()["contact"] == {"email": "paid-owner@example.com", "first_name": "S", "last_name": "Lovelace"}
+    rec = key_record(r.json()["api_key"])
+    assert rec["tier"] == "paid" and rec["plan_code"] is None and rec["active"] is False
+
+    # Further keys join an account by claiming them with the raw key.
+    client.post("/user/keys/claim", headers=headers, json={"api_key": free_key(client, "side-project@example.com")})
     keys = client.get("/user/keys", headers=headers).json()["keys"]
-    assert len(keys) == 2 and {k["tier"] for k in keys} == {"free", "paid"}
+    assert len(keys) == 2 and {k["email"] for k in keys} == {"owner@example.com", "side-project@example.com"}
     assert all(k["key_prefix"].endswith(".") and len(k["key_prefix"]) == 9 for k in keys)
-    summaries = client.get("/user/usage", headers=headers).json()["usage"]
-    assert len(summaries) == 2
-    paid_summary = next(s for s in summaries if s["tier"] == "paid")
-    assert paid_summary["rate_limits"] == {"per_minute": 100, "per_day": 10000}
+    summaries = client.get("/user/usage", headers=paid_user).json()["usage"]
+    assert len(summaries) == 1 and summaries[0]["rate_limits"] == {"per_minute": 100, "per_day": 10000}
 
 
 def test_claim_requires_raw_key_and_never_matches_by_email(client):

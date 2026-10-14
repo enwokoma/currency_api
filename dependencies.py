@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, Any
+import hmac
+from typing import Any, Callable, Dict
 
 from fastapi import HTTPException, Request
 
 from admin_utils import get_expected_admin_token
+from credential_utils import header_credential
 from services.auth_service import (
     validate_api_key,
     charge_call_for_key,
@@ -15,15 +17,16 @@ from billing_helpers import _rate_limits_for_record
 from config import (
     PLANS,
     FREE_TIER_MONTHLY_CREDITS,
+    PUBLIC_ROUTE_LIMITS,
 )
-from rate_limit import allow_request
+from rate_limit import allow_request, client_bucket
 from usage_stats import record_usage_event
 from services.user_service import get_user_by_session
 
 
 def _resolve_key(request: Request) -> Dict[str, Any]:
     """Validate the key named in the request without limiting or charging it."""
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
+    raw_key = header_credential(request, "X-API-KEY", "api_key")
     return validate_api_key(raw_key)
 
 
@@ -79,7 +82,7 @@ def api_key_auth_only(request: Request) -> Dict[str, Any]:
     Used for the protected documentation endpoints, where viewing the
     schema should not consume the caller's monthly credits.
     """
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
+    raw_key = header_credential(request, "X-API-KEY", "api_key")
     return validate_api_key(raw_key, allow_unpaid=True)
 
 
@@ -98,17 +101,35 @@ def paid_key_required(request: Request) -> Dict[str, Any]:
     return _limit_and_charge(key_record)
 
 
+def public_route_limit(route: str) -> Callable[[Request], None]:
+    """Rate-limit an unauthenticated route per client address.
+
+    Limits are looked up in ``PUBLIC_ROUTE_LIMITS`` on every call. Routes that
+    share a name share one budget.
+    """
+
+    def limit(request: Request) -> None:
+        per_minute, per_day = PUBLIC_ROUTE_LIMITS[route]
+        client = client_bucket(request.client.host if request.client else None)
+        allow_request(key_hash=f"public:{route}:{client}", per_minute=per_minute, per_day=per_day)
+
+    return limit
+
+
 def session_required(request: Request) -> Dict[str, Any]:
     """Resolve the calling user based on a session token."""
-    token = request.headers.get("X-SESSION-TOKEN") or request.query_params.get("session_token")
+    token = header_credential(request, "X-SESSION-TOKEN", "session_token")
     user = get_user_by_session(token)
     return user
 
 
 def admin_required(request: Request) -> bool:
     """Validate the admin token for protected admin endpoints."""
-    provided = request.headers.get("X-ADMIN-TOKEN") or request.query_params.get("admin_token")
+    provided = header_credential(request, "X-ADMIN-TOKEN", "admin_token", status_code=403)
     expected = get_expected_admin_token()
-    if provided != expected:
+    # Constant-time comparison, on bytes so a non-ASCII header is a plain mismatch.
+    if not provided or not expected or not hmac.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=403, detail="Invalid admin token")
     return True

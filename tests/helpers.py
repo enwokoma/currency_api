@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import tempfile
 from typing import Any, Dict
@@ -37,6 +38,8 @@ from services.auth_service import hash_key  # noqa: E402
 from storage_utils import atomic_write_json  # noqa: E402
 
 ADMIN = {"X-ADMIN-TOKEN": ADMIN_TOKEN}
+# Every email the app sends during a test (conftest routes mailer delivery here).
+OUTBOX: list = []
 PASSWORD = "StrongPass123"
 STORES = {
     "keys.json": "keys",
@@ -88,6 +91,25 @@ def patch_transaction(reference: str, **fields: Any) -> None:
     raise AssertionError("transaction not found")
 
 
+def relax_public_limits(monkeypatch) -> None:
+    """Lift the per-client limits for tests that call public routes many times."""
+    import config
+
+    for route in list(config.PUBLIC_ROUTE_LIMITS):
+        monkeypatch.setitem(config.PUBLIC_ROUTE_LIMITS, route, (1000, 10000))
+
+
+# --------------------------------------------------------------------------- mail
+def emails_to(address: str) -> list:
+    return [m for m in OUTBOX if m["To"] == address.strip().lower()]
+
+
+def last_email_to(address: str):
+    sent = emails_to(address)
+    assert sent, f"no email was sent to {address}"
+    return sent[-1]
+
+
 # --------------------------------------------------------------------------- users
 def register(client, email: str, first="Ada", last="Lovelace", password=PASSWORD, confirm=None):
     return client.post(
@@ -102,10 +124,25 @@ def register(client, email: str, first="Ada", last="Lovelace", password=PASSWORD
     )
 
 
+def verification_for(email: str) -> Dict[str, str]:
+    """The latest verification code and token, read from the email the user got."""
+    body = last_email_to(email).get_content()
+    return {
+        "otp": re.search(r"^Verification code: (\d{6})$", body, re.M).group(1),
+        "token": re.search(r"^Verification token: (\S+)$", body, re.M).group(1),
+    }
+
+
+def reset_token_from_email(email: str) -> str:
+    """The password reset token in the latest email sent to ``email``."""
+    body = last_email_to(email).get_content()
+    return re.search(r"^Reset token: (\S+)$", body, re.M).group(1)
+
+
 def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:
     r = register(client, email, **kwargs)
-    assert r.status_code == 201, r.text
-    otp = r.json()["verification"]["otp"]
+    assert r.status_code == 202, r.text
+    otp = verification_for(email)["otp"]
     r = client.post("/auth/verify-email", json={"email": email, "otp": otp})
     assert r.status_code == 200, r.text
     r = client.post("/auth/login", json={"email": email, "password": kwargs.get("password", PASSWORD)})
@@ -114,10 +151,16 @@ def register_and_login(client, email: str, **kwargs) -> Dict[str, str]:
 
 
 # --------------------------------------------------------------------------- keys
+def api_key_from_email(email: str) -> str:
+    """The API key in the latest email sent to ``email``."""
+    body = last_email_to(email).get_content()
+    return re.search(r"^API key: (\S+)$", body, re.M).group(1)
+
+
 def free_key(client, email: str, first="Free", last="User") -> str:
     r = client.post("/auth/free-key", json={"email": email, "first_name": first, "last_name": last})
-    assert r.status_code == 200, r.text
-    return r.json()["api_key"]
+    assert r.status_code == 202, r.text
+    return api_key_from_email(email)
 
 
 def admin_key(client, owner: str, email: str, plan_code=None, activate=True, first="Admin", last="User") -> str:
@@ -153,6 +196,22 @@ def subscribe(client, email: str, plan_code="BASIC_MONTHLY", first="Bill", last=
     if owner is not None:
         payload["owner"] = owner
     return client.post("/billing/subscribe", json=payload)
+
+
+def subscribe_key(client, email: str, plan_code="BASIC_MONTHLY", **kwargs) -> str:
+    """Subscribe and return the key from the email that follows."""
+    r = subscribe(client, email, plan_code=plan_code, **kwargs)
+    assert r.status_code == 202, r.text
+    return api_key_from_email(email)
+
+
+def checkout_from_email(email: str) -> Dict[str, str]:
+    """The checkout link and reference in the latest email sent to ``email``."""
+    body = last_email_to(email).get_content()
+    return {
+        "authorization_url": re.search(r"^Checkout link: (\S+)$", body, re.M).group(1),
+        "reference": re.search(r"^Reference: (\S+)$", body, re.M).group(1),
+    }
 
 
 def upgrade(client, key: str, plan_code: str, **contact):

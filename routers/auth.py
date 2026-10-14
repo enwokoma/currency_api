@@ -4,15 +4,29 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Query
 
+from credential_utils import header_credential
+from dependencies import public_route_limit
+from billing_helpers import _normalize_contact_fields
+from mailer import valid_address
+from notifications import (
+    send_account_exists,
+    send_api_key,
+    send_key_exists,
+    send_password_changed,
+    send_password_reset,
+    send_verification,
+)
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
+    ForgotPasswordPayload,
     FreeKeyPayload,
     RegisterPayload,
     ResendVerificationPayload,
     VerifyEmailPayload,
     LoginPayload,
+    ResetPasswordPayload,
 )
 from services.user_service import (
     create_user,
@@ -20,74 +34,114 @@ from services.user_service import (
     verify_user,
     authenticate_user,
     create_session,
+    reset_password,
     revoke_session,
     sanitize_user,
+    start_password_reset,
 )
 
 auth_router = APIRouter()
 
 
-@auth_router.post("/auth/free-key", tags=["Auth"])
-def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
-    """Public endpoint to request a free-tier API key."""
-    email_norm = payload.email.strip().lower()
-    existing = find_key_by_email(email_norm, include_inactive=True, include_revoked=True)
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="A key already exists for this email. Please check your inbox or use /auth/register to manage keys.",
+def _issue_free_key(email: str, first_name: str, last_name: str) -> None:
+    """Background half of /auth/free-key: create and email the key, or a notice."""
+    if find_key_by_email(email, include_inactive=True, include_revoked=True):
+        send_key_exists(email)
+        return
+    try:
+        raw = generate_free_key(
+            owner=email, email=email, first_name=first_name, last_name=last_name
         )
-    raw = generate_free_key(
-        owner=email_norm,
-        email=email_norm,
-        first_name=payload.first_name,
-        last_name=payload.last_name,
+    except HTTPException:
+        # Lost a race with a concurrent request for the same address.
+        send_key_exists(email)
+        return
+    send_api_key(email, raw, "free")
+
+
+@auth_router.post(
+    "/auth/free-key",
+    tags=["Auth"],
+    status_code=202,
+    dependencies=[Depends(public_route_limit("free-key"))],
+)
+def get_free_key(payload: FreeKeyPayload, background: BackgroundTasks) -> Dict[str, str]:
+    """Email a free-tier API key to the address given.
+
+    The key goes only to that inbox, so nobody can take a key out in someone
+    else's name. The answer is identical, and is sent before any lookup, for
+    addresses with and without a key; the owner of an existing key gets a
+    notice instead of a second key.
+    """
+    email, first_name, last_name = _normalize_contact_fields(
+        payload.email, payload.first_name, payload.last_name
     )
+    if not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    background.add_task(_issue_free_key, email, first_name, last_name)
     return {
         "tier": "free",
-        "api_key": raw,
+        "message": "Check your inbox. The key has been emailed to this address.",
         "note": "Free keys have limited quota. Upgrade for higher limits.",
     }
 
 
-@auth_router.post("/auth/register", tags=["User"], status_code=201)
-def register_user(payload: RegisterPayload) -> Dict[str, Any]:
-    """Register a new user."""
+@auth_router.post(
+    "/auth/register",
+    tags=["User"],
+    status_code=202,
+    dependencies=[Depends(public_route_limit("register"))],
+)
+def register_user(payload: RegisterPayload, background: BackgroundTasks) -> Dict[str, Any]:
+    """Register a new user and email them a verification code.
+
+    The answer is the same whether or not the email already has an account;
+    the owner of an existing account gets a notice by email instead. The code
+    proves control of the inbox, so it is never part of the response.
+    """
     if payload.password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Password and confirm password do not match")
+    email = payload.email.strip().lower()
+    if not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
     user_rec = create_user(
         first_name=payload.first_name,
         last_name=payload.last_name,
-        email=payload.email,
+        email=email,
         password=payload.password,
     )
-    verification = user_rec.get("verification", {}) or {}
-    return {
-        "message": "User registered successfully. Please verify your email.",
-        "user": sanitize_user(user_rec),
-        "verification": {
-            "otp": verification.get("otp"),
-            "token": verification.get("token"),
-            "expires_at": verification.get("expires_at"),
-        },
-    }
+    if user_rec is None:
+        background.add_task(send_account_exists, email)
+    else:
+        background.add_task(send_verification, email, user_rec["verification"])
+    return {"message": "Registration received. Check your email to verify your address."}
 
 
-@auth_router.post("/auth/resend-verification", tags=["User"])
-def resend_verification(payload: ResendVerificationPayload) -> Dict[str, Any]:
-    """Resend the verification code/link for an unverified user."""
-    verification = start_verification(payload.email.strip().lower())
-    return {
-        "message": "Verification code has been resent.",
-        "verification": {
-            "otp": verification.get("otp"),
-            "token": verification.get("token"),
-            "expires_at": verification.get("expires_at"),
-        },
-    }
+@auth_router.post(
+    "/auth/resend-verification",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("resend-verification"))],
+)
+def resend_verification(
+    payload: ResendVerificationPayload,
+    background: BackgroundTasks,
+) -> Dict[str, Any]:
+    """Email a fresh verification code/link to an unverified user.
+
+    Answers the same for unknown, unverified and verified addresses.
+    """
+    email = payload.email.strip().lower()
+    verification = start_verification(email)
+    if verification is not None:
+        background.add_task(send_verification, email, verification)
+    return {"message": "If this address has an unverified account, a new code is on its way."}
 
 
-@auth_router.post("/auth/verify-email", tags=["User"])
+@auth_router.post(
+    "/auth/verify-email",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("verify-email"))],
+)
 def verify_email(payload: VerifyEmailPayload) -> Dict[str, Any]:
     """Verify a user's email address via OTP or token."""
     if bool(payload.otp) == bool(payload.token):
@@ -103,7 +157,11 @@ def verify_email(payload: VerifyEmailPayload) -> Dict[str, Any]:
     }
 
 
-@auth_router.get("/auth/verify-email", tags=["User"])
+@auth_router.get(
+    "/auth/verify-email",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("verify-email"))],
+)
 def verify_email_via_link(
     email: str = Query(..., description="Email address to verify"),
     token: str = Query(..., description="Verification token from email link"),
@@ -119,7 +177,11 @@ def verify_email_via_link(
     }
 
 
-@auth_router.post("/auth/login", tags=["User"])
+@auth_router.post(
+    "/auth/login",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("login"))],
+)
 def login(payload: LoginPayload) -> Dict[str, Any]:
     """Authenticate a user and issue a session token."""
     user = authenticate_user(email=payload.email.strip().lower(), password=payload.password)
@@ -135,7 +197,50 @@ def login(payload: LoginPayload) -> Dict[str, Any]:
 @auth_router.post("/auth/logout", tags=["User"])
 def logout(request: Request) -> Dict[str, Any]:
     """Revoke an active session token."""
-    token = request.headers.get("X-SESSION-TOKEN") or request.query_params.get("session_token")
+    token = header_credential(request, "X-SESSION-TOKEN", "session_token")
     if token:
         revoke_session(token)
     return {"message": "Logged out successfully."}
+
+
+def _email_password_reset(email: str) -> None:
+    """Background half of /auth/forgot-password."""
+    token = start_password_reset(email)
+    if token is not None:
+        send_password_reset(email, token)
+
+
+@auth_router.post(
+    "/auth/forgot-password",
+    tags=["User"],
+    status_code=202,
+    dependencies=[Depends(public_route_limit("forgot-password"))],
+)
+def forgot_password(payload: ForgotPasswordPayload, background: BackgroundTasks) -> Dict[str, Any]:
+    """Email a password reset token to the address, if it has an account.
+
+    The answer is identical, and is sent before any lookup, whether or not
+    the address has an account.
+    """
+    background.add_task(_email_password_reset, payload.email.strip().lower())
+    return {"message": "If this address has an account, a reset token is on its way."}
+
+
+@auth_router.post(
+    "/auth/reset-password",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("reset-password"))],
+)
+def reset_password_with_token(
+    payload: ResetPasswordPayload,
+    background: BackgroundTasks,
+) -> Dict[str, Any]:
+    """Set a new password with the emailed token and sign out every session."""
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="Password and confirm password do not match")
+    email = payload.email.strip().lower()
+    reset_password(email, payload.token.strip(), payload.new_password)
+    background.add_task(send_password_changed, email)
+    return {
+        "message": "Password updated. Every session was signed out; sign in with the new password."
+    }

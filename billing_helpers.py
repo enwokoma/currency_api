@@ -6,13 +6,17 @@ from typing import Dict, Any, Tuple
 
 from fastapi import HTTPException, Request
 
+from credential_utils import header_credential
 from services.auth_service import (
     validate_api_key,
     load_keys,
     mark_pending_plan,
 )
 from services.billing_service import initialize_transaction
+from services.user_service import get_user_by_session
 from config import (
+    BILLING_REQUESTS_PER_DAY,
+    BILLING_REQUESTS_PER_MINUTE,
     PLANS,
     DEFAULT_PAID_REQUESTS_PER_DAY,
     DEFAULT_PAID_REQUESTS_PER_MINUTE,
@@ -20,6 +24,7 @@ from config import (
     FREE_REQUESTS_PER_MINUTE,
 )
 from services.transaction_service import record_transaction
+from rate_limit import allow_request
 
 
 def _normalize_contact_fields(email: str, first_name: str, last_name: str) -> tuple[str, str, str]:
@@ -48,35 +53,56 @@ def _get_plan_or_error(plan_code: str) -> Dict[str, Any]:
     return plan
 
 
-def _get_key_by_prefix(prefix: str) -> Dict[str, Any]:
-    """Find a key globally via key hash prefix (requires uniqueness)."""
+def _get_owned_key_by_prefix(user_id: str, prefix: str) -> Dict[str, Any]:
+    """Pick one of the session user's own keys by key hash prefix.
+
+    The prefix only selects among keys the session already owns. It never
+    proves ownership on its own: prefixes appear in listings and logs.
+    """
+    prefix = prefix.strip()
+    if not prefix:
+        raise HTTPException(
+            status_code=400,
+            detail="Send X-API-KEY-PREFIX to choose which of your keys to use.",
+        )
     data = load_keys()
-    matches = [r for r in data.get("keys", []) if (r.get("key_hash") or "").startswith(prefix)]
+    matches = [
+        r
+        for r in data.get("keys", [])
+        if r.get("owner") == user_id and (r.get("key_hash") or "").startswith(prefix)
+    ]
     if not matches:
-        raise HTTPException(status_code=401, detail="Invalid API key prefix")
+        raise HTTPException(status_code=404, detail="API key not found for this user")
     if len(matches) > 1:
-        raise HTTPException(status_code=400, detail="API key prefix is not unique; provide full key")
+        raise HTTPException(
+            status_code=400,
+            detail="Key prefix matches more than one of your keys; send a longer prefix.",
+        )
     rec = dict(matches[0])
-    rec["key_hash"] = matches[0].get("key_hash")
+    rec.setdefault("tier", "paid")
+    rec.setdefault("subscription_status", "active" if rec.get("tier") == "paid" else "free")
     return rec
 
 
 def billing_key_required(request: Request) -> Dict[str, Any]:
-    """Allow pending/inactive keys to initiate billing flows."""
-    raw_key = request.headers.get("X-API-KEY") or request.query_params.get("api_key")
-    prefix = request.headers.get("X-API-KEY-PREFIX") or request.query_params.get("api_key_prefix")
+    """Resolve the key a billing call acts on, allowing pending/inactive keys.
+
+    The caller must prove control of the key: either the raw key in
+    ``X-API-KEY``, or a session that owns the key (``X-SESSION-TOKEN``) with
+    ``X-API-KEY-PREFIX`` naming which of the user's keys to use.
+    """
+    raw_key = header_credential(request, "X-API-KEY", "api_key")
+    session_token = header_credential(request, "X-SESSION-TOKEN", "session_token")
     if raw_key:
         key_record = validate_api_key(raw_key, allow_inactive=True, allow_unpaid=True)
-    elif prefix:
-        key_record = _get_key_by_prefix(prefix)
-        # Apply basic validation similar to validate_api_key for billing flows
-        if not key_record.get("active", True) and key_record.get("subscription_status") not in {"pending", None}:
-            raise HTTPException(
-                status_code=403,
-                detail="This key is inactive. Contact support or generate a new key.",
-            )
-        key_record.setdefault("tier", "paid")
-        key_record.setdefault("subscription_status", "active" if key_record.get("tier") == "paid" else "free")
+    elif session_token:
+        user = get_user_by_session(session_token)
+        key_record = _get_owned_key_by_prefix(user["id"], request.headers.get("X-API-KEY-PREFIX") or "")
+    elif request.headers.get("X-API-KEY-PREFIX"):
+        raise HTTPException(
+            status_code=401,
+            detail="A key prefix alone is not accepted. Send X-API-KEY, or X-SESSION-TOKEN for a key you own.",
+        )
     else:
         raise HTTPException(status_code=401, detail="Missing API Key")
     # Hard-block revoked or inactive keys that are not merely pending activation
@@ -88,6 +114,11 @@ def billing_key_required(request: Request) -> Dict[str, Any]:
             status_code=403,
             detail="This key is inactive. Contact support or generate a new key.",
         )
+    allow_request(
+        key_hash=f"billing:{key_record['key_hash']}",
+        per_minute=BILLING_REQUESTS_PER_MINUTE,
+        per_day=BILLING_REQUESTS_PER_DAY,
+    )
     return key_record
 
 

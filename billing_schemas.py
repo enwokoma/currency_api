@@ -10,10 +10,13 @@ from schemas import KeyContact
 
 
 class SubscribePayload(KeyContact):
-    """Direct paid subscription payload (without requiring an existing key)."""
+    """Direct paid subscription payload (without requiring an existing key).
+
+    The key belongs to its email. To manage it from an account, attach it
+    with POST /user/keys/claim, which requires the raw key.
+    """
 
     plan_code: str
-    owner: Optional[str] = None  # Optional identifier (e.g., user id) to tag the key
 
 
 class UpgradePayload(BaseModel):

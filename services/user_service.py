@@ -10,6 +10,7 @@ call from FastAPI endpoints.
 
 from __future__ import annotations
 
+import hmac
 import secrets
 import time
 import uuid
@@ -17,6 +18,9 @@ import hashlib
 from typing import Dict, Any, Optional, Tuple
 
 from fastapi import HTTPException, status
+
+from config import LOGIN_LOCKOUT_SECONDS, LOGIN_MAX_FAILURES
+from rate_limit import clear_bucket, count_hits, record_hit
 from storage_utils import atomic_write_json, ensure_json_file, load_json_file, synchronized
 
 
@@ -25,6 +29,20 @@ SESSIONS_FILE = "sessions.json"
 
 # Verification codes expire after 15 minutes
 VERIFICATION_TTL_SECONDS = 15 * 60
+# A code is discarded after this many wrong guesses; a 6-digit OTP must not be
+# open to unlimited guessing while it is valid.
+MAX_VERIFICATION_ATTEMPTS = 5
+# The one answer to every failed verification, so it never tells a caller
+# whether the address has an account, is already verified or had a code.
+INVALID_VERIFICATION = "Invalid or expired verification code. Request a new one if this keeps happening."
+# Hashed against when an email has no account, so that registering or logging
+# in costs the same time whether or not the address is known.
+_DUMMY_SALT_HEX = secrets.token_hex(16)
+# Password reset tokens expire after 30 minutes and work once
+PASSWORD_RESET_TTL_SECONDS = 30 * 60
+# The one answer to every failed reset, so it never says whether the address
+# has an account or ever asked for a reset.
+INVALID_RESET = "Invalid or expired reset token. Request a new one with /auth/forgot-password."
 # Sessions last for 24 hours by default
 SESSION_TTL_SECONDS = 24 * 60 * 60
 
@@ -95,14 +113,30 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _check_password_rules(password: str) -> None:
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 @synchronized
-def create_user(first_name: str, last_name: str, email: str, password: str) -> Dict[str, Any]:
+def create_user(
+    first_name: str, last_name: str, email: str, password: str
+) -> Optional[Dict[str, Any]]:
+    """Create an unverified user, or return None when the email is taken.
+
+    A taken email still costs one password hash, so the caller can answer
+    both cases the same way without the response time giving it away.
+    """
+    _check_password_rules(password)
     data = load_users()
     email_norm = normalize_email(email)
     if _find_user_index(email_norm, data) is not None:
-        raise HTTPException(status_code=400, detail="Email is already registered")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+        _hash_password(password, _DUMMY_SALT_HEX)
+        return None
     user_id = uuid.uuid4().hex
     salt_hex, password_hash = _hash_password(password)
     verification = _generate_verification_bundle()
@@ -148,14 +182,16 @@ def _assert_user_exists(email: str) -> Dict[str, Any]:
 
 
 @synchronized
-def start_verification(email: str) -> Dict[str, Any]:
-    """Regenerate verification bundle for a user."""
+def start_verification(email: str) -> Optional[Dict[str, Any]]:
+    """Issue a fresh verification bundle, or None if there is nothing to verify.
+
+    Unknown and already-verified addresses both return None, so the caller
+    can answer every request the same way.
+    """
     data = load_users()
     idx = _find_user_index(email, data)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    if data["users"][idx].get("email_verified"):
-        raise HTTPException(status_code=400, detail="Email is already verified")
+    if idx is None or data["users"][idx].get("email_verified"):
+        return None
     verification = _generate_verification_bundle()
     data["users"][idx]["verification"] = verification
     data["users"][idx]["updated_at"] = _now_iso()
@@ -165,26 +201,37 @@ def start_verification(email: str) -> Dict[str, Any]:
 
 @synchronized
 def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = None) -> Dict[str, Any]:
-    """Mark the user's email as verified if the provided OTP or token matches."""
+    """Mark the user's email as verified if the provided OTP or token matches.
+
+    Every failure, including an unknown or already-verified address, raises
+    the same 400 ``INVALID_VERIFICATION``: only someone holding the current
+    code learns anything about the account.
+    """
     if not otp and not token:
         raise HTTPException(status_code=400, detail="Provide either otp or token")
+    invalid = HTTPException(status_code=400, detail=INVALID_VERIFICATION)
     data = load_users()
     idx = _find_user_index(email, data)
     if idx is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise invalid
     user = data["users"][idx]
-    if user.get("email_verified"):
-        return user
     verification = user.get("verification")
-    if not verification:
-        raise HTTPException(status_code=400, detail="No verification challenge is pending")
+    if user.get("email_verified") or not verification:
+        raise invalid
     if time.time() > verification.get("expires_at", 0):
-        raise HTTPException(status_code=400, detail="Verification code expired")
+        raise invalid
     otp_valid = bool(otp and verification.get("otp") == otp)
     token_valid = bool(token and verification.get("token") == token)
     if not (otp_valid or token_valid):
-        detail = "Invalid OTP" if otp and not token else "Invalid verification link"
-        raise HTTPException(status_code=400, detail=detail)
+        attempts = int(verification.get("failed_attempts", 0)) + 1
+        if attempts >= MAX_VERIFICATION_ATTEMPTS:
+            user["verification"] = None
+        else:
+            verification["failed_attempts"] = attempts
+        user["updated_at"] = _now_iso()
+        data["users"][idx] = user
+        save_users(data)
+        raise invalid
     user["email_verified"] = True
     user["verification"] = None
     user["updated_at"] = _now_iso()
@@ -194,19 +241,96 @@ def verify_user(email: str, otp: Optional[str] = None, token: Optional[str] = No
 
 
 @synchronized
-def authenticate_user(email: str, password: str) -> Dict[str, Any]:
-    """Return the user if the email/password combination is valid."""
+def start_password_reset(email: str) -> Optional[str]:
+    """Issue a reset token for ``email``, or return None when there is no account.
+
+    Only the token's SHA-256 is stored, so the users file alone cannot be used
+    to take over an account. A new token replaces any earlier one.
+    """
     data = load_users()
     idx = _find_user_index(email, data)
     if idx is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        return None
+    token = f"reset_{secrets.token_urlsafe(32)}"
+    data["users"][idx]["password_reset"] = {
+        "token_hash": _hash_reset_token(token),
+        "expires_at": time.time() + PASSWORD_RESET_TTL_SECONDS,
+    }
+    data["users"][idx]["updated_at"] = _now_iso()
+    save_users(data)
+    return token
+
+
+@synchronized
+def reset_password(email: str, token: str, new_password: str) -> Dict[str, Any]:
+    """Set a new password with a valid reset token.
+
+    Every failure raises the same 400 ``INVALID_RESET``. On success the token
+    is spent, every session of the user is revoked and the sign-in lockout for
+    the address is cleared. Holding the emailed token proves control of the
+    inbox, so an unverified address becomes verified.
+    """
+    _check_password_rules(new_password)
+    invalid = HTTPException(status_code=400, detail=INVALID_RESET)
+    data = load_users()
+    idx = _find_user_index(email, data)
+    if idx is None:
+        raise invalid
+    user = data["users"][idx]
+    pending = user.get("password_reset") or {}
+    if not pending or time.time() > pending.get("expires_at", 0):
+        raise invalid
+    if not hmac.compare_digest(_hash_reset_token(token), pending.get("token_hash") or ""):
+        raise invalid
+    salt_hex, password_hash = _hash_password(new_password)
+    user.update(
+        {
+            "salt": salt_hex,
+            "password_hash": password_hash,
+            "password_reset": None,
+            "email_verified": True,
+            "verification": None,
+            "updated_at": _now_iso(),
+        }
+    )
+    data["users"][idx] = user
+    save_users(data)
+    revoke_sessions_for_user(user["id"])
+    clear_bucket(f"login-failures:{normalize_email(email)}")
+    return user
+
+
+@synchronized
+def authenticate_user(email: str, password: str) -> Dict[str, Any]:
+    """Return the user if the email/password combination is valid.
+
+    Wrong passwords count against the email (known or not); once there are
+    ``LOGIN_MAX_FAILURES`` in ``LOGIN_LOCKOUT_SECONDS`` every attempt gets 429.
+    A correct password clears the count.
+    """
+    failures = f"login-failures:{normalize_email(email)}"
+    if count_hits(failures, LOGIN_LOCKOUT_SECONDS) >= LOGIN_MAX_FAILURES:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts for this account. Try again later.",
+        )
+    invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    data = load_users()
+    idx = _find_user_index(email, data)
+    if idx is None:
+        _hash_password(password, _DUMMY_SALT_HEX)
+        record_hit(failures)
+        raise invalid
     user = data["users"][idx]
     salt_hex = user.get("salt")
     if not salt_hex:
         raise HTTPException(status_code=500, detail="User salt is missing")
     _, candidate_hash = _hash_password(password, salt_hex)
-    if candidate_hash != user.get("password_hash"):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    stored_hash = user.get("password_hash") or ""
+    if not hmac.compare_digest(candidate_hash.encode("utf-8"), stored_hash.encode("utf-8")):
+        record_hit(failures)
+        raise invalid
+    clear_bucket(failures)
     if not user.get("email_verified"):
         raise HTTPException(status_code=403, detail="Email is not verified yet")
     user["last_login_at"] = _now_iso()
@@ -251,6 +375,20 @@ def revoke_session(token: str) -> None:
             updated = True
     if updated:
         save_sessions(data)
+
+
+@synchronized
+def revoke_sessions_for_user(user_id: str) -> int:
+    """Revoke every live session of a user; returns how many were revoked."""
+    data = load_sessions()
+    revoked = 0
+    for session in data.get("sessions", []):
+        if session.get("user_id") == user_id and not session.get("revoked", False):
+            session["revoked"] = True
+            revoked += 1
+    if revoked:
+        save_sessions(data)
+    return revoked
 
 
 def get_user_by_session(token: str, require_verified: bool = True) -> Dict[str, Any]:

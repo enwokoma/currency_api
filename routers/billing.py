@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
 from services.auth_service import (
     delete_key_by_hash,
@@ -30,7 +30,15 @@ from billing_helpers import (
     billing_key_required,
 )
 from billing_schemas import SubscribePayload, UpgradePayload, VerifyTransactionPayload
-from config import PLANS, FREE_TIER_MONTHLY_CREDITS
+from dependencies import public_route_limit
+from mailer import valid_address
+from notifications import send_key_exists, send_subscription_checkout, send_subscription_failed
+from config import (
+    FREE_TIER_MONTHLY_CREDITS,
+    PLANS,
+    WEBHOOK_MAX_BODY_BYTES,
+    WEBHOOK_REJECTED_LOG_LIMITS,
+)
 from services.transaction_service import (
     find_transaction_by_reference,
     get_latest_transaction_for_key,
@@ -40,7 +48,8 @@ from services.transaction_service import (
     update_transaction_by_reference,
     update_transactions_for_key,
 )
-from webhook_logs import log_webhook_event
+from rate_limit import client_bucket, try_acquire
+from webhook_logs import log_rejected_webhook, log_webhook_event
 
 billing_router = APIRouter(tags=["Billing"])
 
@@ -135,30 +144,25 @@ def list_plans() -> Dict[str, Any]:
     return {"plans": PLANS}
 
 
-@billing_router.post("/billing/subscribe", response_model=Dict[str, Any])
-def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
-    """Create a paid key and immediately start Paystack checkout (public)."""
-    plan = _get_plan_or_error(payload.plan_code)
-    email, first, last = _normalize_contact_fields(
-        payload.email, payload.first_name, payload.last_name
-    )
-    # Ensure the email is not already tied to another key
-    existing = find_key_by_email(email, include_inactive=True, include_revoked=True)
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Email already has an API key. Use /billing/upgrade with that key.",
+def _subscribe_by_email(plan: Dict[str, Any], email: str, first: str, last: str) -> None:
+    """Background half of /billing/subscribe: issue the key and checkout, by email."""
+    if find_key_by_email(email, include_inactive=True, include_revoked=True):
+        send_key_exists(email, plan["name"])
+        return
+    try:
+        raw_key = generate_api_key(
+            owner=email,
+            email=email,
+            first_name=first,
+            last_name=last,
+            active=False,
+            subscription_status="pending",
+            pending_plan_code=plan["code"],
         )
-    owner = payload.owner or email
-    raw_key = generate_api_key(
-        owner=owner,
-        email=email,
-        first_name=first,
-        last_name=last,
-        active=False,
-        subscription_status="pending",
-        pending_plan_code=plan["code"],
-    )
+    except HTTPException:
+        # Lost a race with a concurrent request for the same address.
+        send_key_exists(email, plan["name"])
+        return
     key_hash = hash_key(raw_key)
     try:
         auth_url, reference = _start_subscription_checkout(
@@ -169,18 +173,40 @@ def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
             last_name=last,
             deactivate=True,
         )
-    except Exception:
-        # The caller never receives the key when checkout fails, so leaving the
-        # record behind would only reserve the email and block a retry.
+    except Exception as exc:
+        # The key was never delivered, so leaving the record behind would only
+        # reserve the email and block a retry.
         delete_key_by_hash(key_hash)
-        raise
+        print(f"[billing] Subscription checkout failed: {exc}")
+        send_subscription_failed(email, plan)
+        return
+    send_subscription_checkout(email, raw_key, plan, auth_url, reference)
+
+
+@billing_router.post(
+    "/billing/subscribe",
+    response_model=Dict[str, Any],
+    status_code=202,
+    dependencies=[Depends(public_route_limit("subscribe"))],
+)
+def billing_subscribe(payload: SubscribePayload, background: BackgroundTasks) -> Dict[str, Any]:
+    """Email a new paid key and its Paystack checkout link (public).
+
+    The key and link go only to the address given, and the answer is the
+    same, and sent before any lookup or Paystack call, whether or not the
+    address already has a key. Its owner gets a notice instead.
+    """
+    plan = _get_plan_or_error(payload.plan_code)
+    email, first, last = _normalize_contact_fields(
+        payload.email, payload.first_name, payload.last_name
+    )
+    if not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    background.add_task(_subscribe_by_email, plan, email, first, last)
     return {
         "tier": "paid",
-        "api_key": raw_key,
         "plan": plan,
-        "authorization_url": auth_url,
-        "reference": reference,
-        "message": "Complete payment to activate this key. It remains inactive until Paystack confirms.",
+        "message": "Check your inbox. The API key and checkout link have been emailed to this address.",
     }
 
 
@@ -192,12 +218,20 @@ def billing_upgrade(
     """Start a Paystack transaction to upgrade a free key to a paid plan.
 
     The caller must supply a ``plan_code`` that exists in ``PLANS``.
-    Contact information is taken from the payload if provided, else
-    from the key record. The API key used for authentication will
-    determine which key is upgraded.
+    Names are taken from the payload if provided, else from the key record.
+    The contact email cannot be changed here: moving a key onto another
+    address would let a key holder reserve, or probe for, emails they do not
+    control. Only a legacy key without an email may set one. The API key
+    used for authentication determines which key is upgraded.
     """
     plan = _get_plan_or_error(payload.plan_code)
-    email = (payload.email or key.get("email") or "").strip().lower()
+    current_email = (key.get("email") or "").strip().lower()
+    requested_email = (payload.email or "").strip().lower()
+    if current_email and requested_email and requested_email != current_email:
+        raise HTTPException(status_code=400, detail="A key's contact email can't be changed.")
+    email = current_email or requested_email
+    if email and not valid_address(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
     first = payload.first_name or key.get("first_name")
     last = payload.last_name or key.get("last_name")
     if not email or not first or not last:
@@ -408,14 +442,48 @@ def verify_billing_transaction(
     }
 
 
+def _log_rejected_webhook(request: Request, size: int, reason: str) -> None:
+    """Record a refused delivery, at most WEBHOOK_REJECTED_LOG_LIMITS per client."""
+    client = client_bucket(request.client.host if request.client else None)
+    per_minute, per_day = WEBHOOK_REJECTED_LOG_LIMITS
+    if try_acquire(f"webhook-rejected:{client}", per_minute, per_day):
+        log_rejected_webhook(size, reason)
+
+
+async def _read_webhook_body(request: Request) -> bytes:
+    """Read the body, refusing anything over WEBHOOK_MAX_BODY_BYTES.
+
+    The size is checked as the body streams in, so a request without a
+    Content-Length (chunked) cannot get past the limit either.
+    """
+    too_large = HTTPException(status_code=413, detail="Webhook body too large")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > WEBHOOK_MAX_BODY_BYTES:
+        _log_rejected_webhook(request, int(declared), "body too large")
+        raise too_large
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > WEBHOOK_MAX_BODY_BYTES:
+            _log_rejected_webhook(request, size, "body too large")
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @billing_router.post("/paystack/webhook", status_code=status.HTTP_200_OK, tags=["Billing"])
 async def paystack_webhook(request: Request) -> Dict[str, str]:
-    """Handle Paystack webhook events for subscription management."""
-    body = await request.body()
-    log_webhook_event(body)
+    """Handle Paystack webhook events for subscription management.
+
+    The signature is checked before anything is stored: only verified
+    deliveries are logged with their body.
+    """
+    body = await _read_webhook_body(request)
     signature = request.headers.get("x-paystack-signature")
     if not verify_paystack_signature(body, signature):
+        _log_rejected_webhook(request, len(body), "invalid signature")
         raise HTTPException(status_code=400, detail="Invalid Paystack signature")
+    log_webhook_event(body)
     event_type, api_key_hash, plan_code, info = extract_webhook_info(body)
     reference = info.get("reference")
     subscription_code = info.get("subscription_code")

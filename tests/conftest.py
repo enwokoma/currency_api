@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import helpers  # noqa: F401  (bootstraps cwd + environment before app imports)
 from helpers import STORES, write_store
+import mailer
 import rate_limit
 from services import billing_service, rate_service
 
@@ -154,8 +155,16 @@ def clean_state():
     for name in ("webhook_logs.json", "webhook_logs.pretty.json"):
         if os.path.exists(name):
             os.remove(name)
-    rate_limit.request_timestamps.clear()
+    rate_limit.reset()
     yield
+
+
+@pytest.fixture(autouse=True)
+def outbox(monkeypatch) -> list:
+    """Collect outgoing email instead of sending it."""
+    helpers.OUTBOX.clear()
+    monkeypatch.setattr(mailer, "_deliver", helpers.OUTBOX.append)
+    return helpers.OUTBOX
 
 
 @pytest.fixture(autouse=True)

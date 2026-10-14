@@ -63,9 +63,8 @@ class ClaimKeyPayload(BaseModel):
 class CreateKeyPayload(BaseModel):
     """Payload for creating an API key for a user.
 
-    Contact fields are optional; when omitted, the current user's
-    profile (email, first_name, last_name) is used so that contact
-    metadata always matches the authenticated user.
+    The key always uses the account's email; ``email`` may be omitted and,
+    if sent, must match it. Names default to the user's profile.
     """
 
     email: Optional[str] = None
@@ -107,3 +106,18 @@ class LoginPayload(BaseModel):
 
     email: str
     password: str
+
+
+class ForgotPasswordPayload(BaseModel):
+    """Ask for a password reset token to be emailed."""
+
+    email: str
+
+
+class ResetPasswordPayload(BaseModel):
+    """Set a new password with the emailed reset token."""
+
+    email: str
+    token: str
+    new_password: str
+    confirm_password: str

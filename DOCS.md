@@ -7,7 +7,8 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   - API key: `X-API-KEY: {{free_api_key}}` or `{{paid_api_key}}`
   - Session: `X-SESSION-TOKEN: {{session_token}}`
   - Admin token: `X-ADMIN-TOKEN: {{admin_token}}`
-- **Identity rule**: Every API key must carry a unique `email`, `first_name`, and `last_name`. Attempts to reuse an email for another key return HTTP 400.
+  - Credentials are accepted in these headers only. Sending one as `?api_key=`, `?session_token=` or `?admin_token=` returns 401 (403 on admin routes) naming the header to use, because query strings are written to access logs.
+- **Identity rule**: Every API key must carry a unique `email`, `first_name`, and `last_name`. A second key is never issued for an email: the public routes (`/auth/free-key`, `/billing/subscribe`) give their usual answer and email the owner instead, so responses never reveal which addresses have keys.
 - **JSON-only core endpoints**: `/rate`, `/convert`, `/rates`, `/rate/historical`, `/convert/historical`, `/rates/historical`.
 - **Postman collection**: `postman_collection.json` is regenerated on each app startup so it always reflects the current OpenAPI schema.
 
@@ -25,25 +26,13 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   "confirm_password": "StrongPass123"
 }
 ```
-**Response 201**
+**Response 202**
 ```json
 {
-  "message": "User registered successfully. Please verify your email.",
-  "user": {
-    "id": "uuid",
-    "email": "ada@example.com",
-    "email_verified": false,
-    "created_at": "2025-01-01T12:00:00Z",
-    "updated_at": "2025-01-01T12:00:00Z",
-    "last_login_at": null
-  },
-  "verification": {
-    "otp": "584201",
-    "token": "verify_abcd...",
-    "expires_at": 1730000000.0
-  }
+  "message": "Registration received. Check your email to verify your address."
 }
 ```
+> The 6-digit code, the link token and (with `PUBLIC_BASE_URL` set) a verify link are emailed to the address; they never appear in a response. The answer is the same when the address already has an account: nothing is created and the owner gets a "You already have an account" email. Password and email-format errors (400) are checked first, so they say nothing about the address.
 
 ### Verify email - `POST /auth/verify-email`
 ```json
@@ -53,6 +42,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 }
 ```
 > Provide **exactly one** of `otp` or `token`. Supplying both (or neither) now returns HTTP 400.
+> Every other failure (wrong, expired, used or discarded code, unknown or already-verified address) returns the same HTTP 400 `Invalid or expired verification code...`. Five wrong attempts discard the pending code; request a new one with `POST /auth/resend-verification`.
 
 **Response 200**
 ```json
@@ -84,7 +74,7 @@ GET /auth/verify-email?email=ada@example.com&token=verify_xxx
   }
 }
 ```
-Use this form for “click-to-verify” links in future email integrations.
+This is the link format used in verification emails.
 
 ### Resend verification - `POST /auth/resend-verification`
 ```json
@@ -95,14 +85,10 @@ Use this form for “click-to-verify” links in future email integrations.
 **Response 200**
 ```json
 {
-  "message": "Verification code has been resent.",
-  "verification": {
-    "otp": "123456",
-    "token": "new_verify_token",
-    "expires_at": 1730003600.0
-  }
+  "message": "If this address has an unverified account, a new code is on its way."
 }
 ```
+> The same answer is given for unknown, unverified and verified addresses; only an unverified account is emailed a new code.
 
 ### Login - `POST /auth/login`
 ```json
@@ -120,6 +106,39 @@ Use this form for “click-to-verify” links in future email integrations.
   "user": { "id": "uuid", "email": "ada@example.com", "first_name": "Ada", "last_name": "Lovelace" }
 }
 ```
+
+> Wrong password and unknown email both return HTTP 401 `Invalid credentials` and take the same time. After 10 wrong passwords for one email within 15 minutes, every password check for that email (login and the password confirmations on `/user/keys/*`) returns HTTP 429 until the failures age out. Unknown emails are locked the same way. Forgot your password? Use the reset flow below.
+
+### Forgot password - `POST /auth/forgot-password`
+```json
+{
+  "email": "ada@example.com"
+}
+```
+**Response 202**
+```json
+{
+  "message": "If this address has an account, a reset token is on its way."
+}
+```
+> The same answer is given for every address. An account gets an email with a `Reset token: reset_...` line. The token works once, expires in 30 minutes, and requesting another replaces it. Only its hash is stored.
+
+### Reset password - `POST /auth/reset-password`
+```json
+{
+  "email": "ada@example.com",
+  "token": "reset_...",
+  "new_password": "BrandNewPass456",
+  "confirm_password": "BrandNewPass456"
+}
+```
+**Response 200**
+```json
+{
+  "message": "Password updated. Every session was signed out; sign in with the new password."
+}
+```
+> Password rules (at least 8 characters, matching confirmation) are checked first and return HTTP 400 without spending the token. Any other failure (unknown address, no pending reset, wrong or expired token) returns the same HTTP 400 `Invalid or expired reset token...`. On success every session of the user is revoked, the sign-in lockout for the address is lifted, an unverified address becomes verified (the token proves the inbox), and a "Your password was changed" email is sent.
 
 ### Current user - `GET /user`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
@@ -160,23 +179,22 @@ Use this form for “click-to-verify” links in future email integrations.
   "last_name": "User"
 }
 ```
-**Response 200**
+**Response 202**
 ```json
 {
   "tier": "free",
-  "api_key": "free_3be4c...",
+  "message": "Check your inbox. The key has been emailed to this address.",
   "note": "Free keys have limited quota. Upgrade for higher limits."
 }
 ```
-> **Important**: Emails are globally unique across free and paid keys. If an email already owns a key, this endpoint returns HTTP 400 instructing you to reuse or upgrade the existing key.
+> **Important**: The key is emailed to the address given and is never in the response, so only the owner of the inbox receives it. Emails are globally unique across free and paid keys: if the address already has a key, the answer is identical and its owner gets a "You already have an API key" email instead. Invalid emails or blank names return HTTP 400.
 
 ### Create key (session) - `POST /auth/create-key`
 - Header: `X-SESSION-TOKEN: {{session_token}}`
-- Body includes tier; contact defaults to the logged-in user's profile if omitted:
+- Body includes tier; the key always uses the account's verified email (sending a different `email` returns HTTP 400). Names default to the user's profile:
 ```json
 {
   "tier": "paid",
-  "email": "paid.user@example.com",
   "first_name": "Paid",
   "last_name": "User"
 }
@@ -187,7 +205,7 @@ Use this form for “click-to-verify” links in future email integrations.
   "tier": "paid",
   "api_key": "<uuid>",
   "contact": {
-    "email": "paid.user@example.com",
+    "email": "ada@example.com",
     "first_name": "Paid",
     "last_name": "User"
   },
@@ -448,16 +466,14 @@ Use this form for “click-to-verify” links in future email integrations.
   "plan_code": "BASIC_MONTHLY",
   "email": "newpaid@example.com",
   "first_name": "Bill",
-  "last_name": "Able",
-  "owner": "public-user"   // optional tag
+  "last_name": "Able"
 }
 ```
-**Response 200**
+**Response 202**
 ```json
 {
   "tier": "paid",
-  "api_key": "30aa6ae9-6e2a-4a9d-b8b3-22...",
-  "plan": { 
+  "plan": {
     "code": "BASIC_MONTHLY",
     "name": "Basic Monthly",
     "price_naira": 2000,
@@ -467,15 +483,14 @@ Use this form for “click-to-verify” links in future email integrations.
     "monthly_credits": 5000,
     "paystack_plan_code": "plan_xxxxxxxx"
   },
-  "authorization_url": "https://checkout.paystack.com/...",
-  "reference": "PS_ref_123",
-  "message": "Complete payment to activate this key. It remains inactive until Paystack confirms."
+  "message": "Check your inbox. The API key and checkout link have been emailed to this address."
 }
 ```
-> The generated key stays inactive and subscription_status=`pending` until Paystack confirms.
+> The key, the Paystack checkout link and the reference are emailed to the address given, never returned. The key stays inactive and subscription_status=`pending` until Paystack confirms. If the address already has a key, the answer is identical and its owner is emailed a pointer to `/billing/upgrade`. If Paystack refuses to start checkout, no key is kept and the address gets a "not started" email. Unknown plans, unconfigured plan codes, invalid emails and blank names return HTTP 400. The key belongs to its email; attach it to an account with `POST /user/keys/claim`.
 
 ### Upgrade existing key - `POST /billing/upgrade`
-- Header: `X-API-KEY: {{free_api_key}}` (or `X-API-KEY-PREFIX: {{free_api_key_prefix}}` if the raw key is stored safely)
+- Header: `X-API-KEY: {{free_api_key}}`, or for a key attached to your account, `X-SESSION-TOKEN: {{session_token}}` with `X-API-KEY-PREFIX: {{free_api_key_prefix}}` (the `key_prefix` from `GET /user/keys`, without the trailing dot).
+- The same two options apply to `/billing/verify`, `/billing/cancel` and `GET /transactions`. A prefix without a session that owns the key is refused with 401; a prefix matching none of your keys returns 404, and one matching several returns 400.
 ```json
 {
   "plan_code": "PRO_MONTHLY",
@@ -484,7 +499,7 @@ Use this form for “click-to-verify” links in future email integrations.
   "last_name": "Example"
 }
 ```
-Contact fields overwrite the stored contact (and remain unique).
+`first_name`/`last_name` update the stored contact. The key's email cannot be changed (HTTP 400); only a legacy key with no email on file may set one. Billing calls are limited to 20 a minute and 500 a day per key (HTTP 429), separately from API usage.
 **Response 200**
 ```json
 {
@@ -567,7 +582,7 @@ Contact fields overwrite the stored contact (and remain unique).
   "status": "ok"
 }
 ```
-- Configure your Paystack dashboard to point webhooks at `/paystack/webhook`. The handler verifies the signature using `PAYSTACK_SECRET_KEY`. All events are recorded in `transactions.json`; you can poll `GET /transactions` (per key) or `GET /admin/transactions` to monitor incoming notifications and statuses.
+- Configure your Paystack dashboard to point webhooks at `/paystack/webhook`. The handler verifies the signature using `PAYSTACK_SECRET_KEY` before storing anything: only signed deliveries are written to `webhook_logs.json` with their body. Unsigned deliveries (400) and bodies over 256 KB (413) leave only a reason-and-size record, at most 10 a minute per client. All events are recorded in `transactions.json`; you can poll `GET /transactions` (per key) or `GET /admin/transactions` to monitor incoming notifications and statuses.
 
 ### Verify Paystack transaction (client flow) - `POST /billing/verify`
 - Header: `X-API-KEY: {{paid_or_pending_key}}`
@@ -723,6 +738,21 @@ Contact fields overwrite the stored contact (and remain unique).
   - `active`: paid subscription applied.
   - `canceled`: cancellation or failed billing; key is downgraded to free and credits reset to free tier.
 
+**Unauthenticated routes**: limited per client address (per minute / per day), HTTP 429 when exceeded. Values live in `config.PUBLIC_ROUTE_LIMITS`.
+
+| Route | Per minute | Per day |
+| --- | --- | --- |
+| `POST /auth/free-key` | 5 | 50 |
+| `POST /auth/register` | 5 | 50 |
+| `POST /auth/login` | 10 | 300 |
+| `POST`/`GET /auth/verify-email` (shared) | 10 | 100 |
+| `POST /auth/resend-verification` | 3 | 30 |
+| `POST /billing/subscribe` | 5 | 50 |
+| `POST /auth/forgot-password` | 3 | 30 |
+| `POST /auth/reset-password` | 10 | 100 |
+
+IPv6 clients are counted per /64. Behind a reverse proxy, run uvicorn with `--proxy-headers` so the client address is the caller's, not the proxy's. Counters live in SQLite (`rate_limits.sqlite3`), so every worker process shares them and they survive restarts.
+
 ---
 
 ## 6) Utility
@@ -735,7 +765,7 @@ Contact fields overwrite the stored contact (and remain unique).
 }
 ```
 - **Usage snapshot**: `GET /usage` (API key), `GET /user/usage` (session), and `GET /admin/usage` report request counts, remaining credits, and rate limits.
-- **Data files**: `keys.json`, `transactions.json`, `users.json`, `sessions.json`, `admin_token.txt`. These are recreated automatically if removed.
+- **Data files**: `keys.json`, `transactions.json`, `users.json`, `sessions.json`, `admin_token.txt`, `rate_limits.sqlite3`. These are recreated automatically if removed.
 
 ### Usage endpoints
 - `GET /usage` (header `X-API-KEY`) returns usage for the calling key:
