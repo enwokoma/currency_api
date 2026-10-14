@@ -27,11 +27,14 @@ FastAPI-powered currency conversion service with free and paid tiers, Email/Name
    - `PAYSTACK_SECRET_KEY` (required for real billing)
    - `PAYSTACK_PLAN_BASIC`, `PAYSTACK_PLAN_PRO` (Paystack plan codes)
    - Optional: `ADMIN_TOKEN` (otherwise written to `admin_token.txt` on first run)
+   - Optional: `CORS_ALLOW_ORIGINS`, a comma-separated list of browser origins allowed to call the API (default: any origin; credentialed cross-origin requests are never allowed)
+   - Local development only: `DEV_RETURN_VERIFICATION_CODES=1` echoes email verification codes in the `/auth/register` and `/auth/resend-verification` responses. The service has no mailer yet; never set this on a reachable deployment, because it lets anyone verify any email address.
    > Tip: drop these values inside `.env`; the app auto-loads it on import so `uvicorn`/tests pick them up without manual exporting.
 3. **Run the API**
    ```bash
    ./.venv/Scripts/python -m uvicorn main:app --reload
    ```
+   Behind a reverse proxy, add `--proxy-headers --forwarded-allow-ips=<proxy address>` so per-client rate limits see the real client address instead of the proxy's.
 4. **Admin token**: On first start a secure token is written to `admin_token.txt`. Use it in the `X-ADMIN-TOKEN` header for admin routes.
 
 ---
@@ -51,7 +54,8 @@ This separation keeps route handlers slim while making it easy to locate the und
 
 ## Usage Map (concise)
 
-- **Users**: `POST /auth/register` -> `POST /auth/verify-email` (OTP OR token, never both) or `GET /auth/verify-email?email=...&token=...` -> `POST /auth/login` (stores session token in `X-SESSION-TOKEN`).
+- **Credentials travel in headers only**: `X-API-KEY`, `X-SESSION-TOKEN`, `X-ADMIN-TOKEN`. The old `?api_key=`, `?session_token=` and `?admin_token=` query parameters are refused (401, or 403 on admin routes) because URLs end up in access logs.
+- **Users**: `POST /auth/register` -> `POST /auth/verify-email` (OTP OR token, never both) or `GET /auth/verify-email?email=...&token=...` -> `POST /auth/login` (stores session token in `X-SESSION-TOKEN`). The verification code is meant to reach the user by email and is not returned by the API; five wrong guesses discard it (request a new one with `POST /auth/resend-verification`).
 - **Key creation (requires email/name)**:
   - Public: `POST /auth/free-key` (free tier). Email uniqueness is enforced globally—once an email owns a key (free or paid), additional calls will return 400.
   - Authenticated: `POST /auth/create-key` with `tier` = `free` or `paid` (paid keys remain inactive with `subscription_status=pending` until upgraded via billing).
@@ -60,6 +64,7 @@ This separation keeps route handlers slim while making it easy to locate the und
   - Claiming: `POST /user/keys/claim` attaches a key created outside the account (public free key or `/billing/subscribe`) by presenting the raw key. Keys are never reassigned by email match.
 - **Billing**:
   - Create paid key + checkout: `POST /billing/subscribe` (public).
+  - Billing calls on an existing key (`/billing/upgrade`, `/billing/verify`, `/billing/cancel`, `GET /transactions`) need the raw key in `X-API-KEY`, or a session that owns the key: `X-SESSION-TOKEN` plus `X-API-KEY-PREFIX` (from `GET /user/keys`) to choose which of the user's keys. A key prefix on its own is not accepted.
   - Upgrade existing key: `POST /billing/upgrade` (uses caller's API key contact details).
   - Verify transaction: `POST /billing/verify` (confirms Paystack reference and applies upgrade).
   - Cancel: `POST /billing/cancel` (paid key required).
@@ -102,6 +107,7 @@ The suite in `tests/` drives the app end to end over HTTP with the FastAPI test 
 
 - Keys, users, sessions, and transactions are stored in JSON files in the project root (`keys.json`, `users.json`, `sessions.json`, `transactions.json`).
 - Per-key request counters live in `usage.json` and power `/usage`, `/user/usage`, and `/admin/usage`.
-- Rate limits and monthly credits are enforced per key tier/plan (free: 10 req/min, 200/day by default; paid limits derive from plan definitions in `main.py`).
+- Rate limits and monthly credits are enforced per key tier/plan (free: 10 req/min, 200/day by default; paid limits derive from plan definitions in `config.py`).
+- Routes that need no credential are limited per client address (`config.PUBLIC_ROUTE_LIMITS`, per minute / per day): `/auth/free-key` 5/50, `/auth/register` 5/50, `/auth/login` 10/300, `/auth/verify-email` (POST and GET together) 10/100, `/auth/resend-verification` 3/30, `/billing/subscribe` 5/50. IPv6 clients are counted per /64. Over the limit the API answers 429.
 - Free and paid credits reset automatically each month; pending subscriptions mark keys accordingly until Paystack confirms.
 - Run the API as a **single worker process** (the default for `uvicorn main:app`). Store writes are serialized with an in-process lock and the rate limiter is in-memory, so multiple workers would race on the JSON files and each keep their own request counters.

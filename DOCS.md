@@ -7,6 +7,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
   - API key: `X-API-KEY: {{free_api_key}}` or `{{paid_api_key}}`
   - Session: `X-SESSION-TOKEN: {{session_token}}`
   - Admin token: `X-ADMIN-TOKEN: {{admin_token}}`
+  - Credentials are accepted in these headers only. Sending one as `?api_key=`, `?session_token=` or `?admin_token=` returns 401 (403 on admin routes) naming the header to use, because query strings are written to access logs.
 - **Identity rule**: Every API key must carry a unique `email`, `first_name`, and `last_name`. Attempts to reuse an email for another key return HTTP 400.
 - **JSON-only core endpoints**: `/rate`, `/convert`, `/rates`, `/rate/historical`, `/convert/historical`, `/rates/historical`.
 - **Postman collection**: `postman_collection.json` is regenerated on each app startup so it always reflects the current OpenAPI schema.
@@ -38,12 +39,11 @@ This document provides full endpoint-by-endpoint details, request/response sampl
     "last_login_at": null
   },
   "verification": {
-    "otp": "584201",
-    "token": "verify_abcd...",
     "expires_at": 1730000000.0
   }
 }
 ```
+> The OTP and link token are not returned: they prove control of the inbox and must reach the user by email. The service has no mailer yet. For local development only, `DEV_RETURN_VERIFICATION_CODES=1` adds `otp` and `token` to this response.
 
 ### Verify email - `POST /auth/verify-email`
 ```json
@@ -53,6 +53,7 @@ This document provides full endpoint-by-endpoint details, request/response sampl
 }
 ```
 > Provide **exactly one** of `otp` or `token`. Supplying both (or neither) now returns HTTP 400.
+> Five wrong attempts discard the pending code (HTTP 400 `Too many incorrect attempts...`); request a new one with `POST /auth/resend-verification`.
 
 **Response 200**
 ```json
@@ -97,12 +98,11 @@ Use this form for “click-to-verify” links in future email integrations.
 {
   "message": "Verification code has been resent.",
   "verification": {
-    "otp": "123456",
-    "token": "new_verify_token",
     "expires_at": 1730003600.0
   }
 }
 ```
+> As with registration, the new code is not part of the response.
 
 ### Login - `POST /auth/login`
 ```json
@@ -475,7 +475,8 @@ Use this form for “click-to-verify” links in future email integrations.
 > The generated key stays inactive and subscription_status=`pending` until Paystack confirms.
 
 ### Upgrade existing key - `POST /billing/upgrade`
-- Header: `X-API-KEY: {{free_api_key}}` (or `X-API-KEY-PREFIX: {{free_api_key_prefix}}` if the raw key is stored safely)
+- Header: `X-API-KEY: {{free_api_key}}`, or for a key attached to your account, `X-SESSION-TOKEN: {{session_token}}` with `X-API-KEY-PREFIX: {{free_api_key_prefix}}` (the `key_prefix` from `GET /user/keys`, without the trailing dot).
+- The same two options apply to `/billing/verify`, `/billing/cancel` and `GET /transactions`. A prefix without a session that owns the key is refused with 401; a prefix matching none of your keys returns 404, and one matching several returns 400.
 ```json
 {
   "plan_code": "PRO_MONTHLY",
@@ -722,6 +723,19 @@ Contact fields overwrite the stored contact (and remain unique).
   - `pending`: checkout started; keys created via `/billing/subscribe` are inactive until Paystack confirms.
   - `active`: paid subscription applied.
   - `canceled`: cancellation or failed billing; key is downgraded to free and credits reset to free tier.
+
+**Unauthenticated routes**: limited per client address (per minute / per day), HTTP 429 when exceeded. Values live in `config.PUBLIC_ROUTE_LIMITS`.
+
+| Route | Per minute | Per day |
+| --- | --- | --- |
+| `POST /auth/free-key` | 5 | 50 |
+| `POST /auth/register` | 5 | 50 |
+| `POST /auth/login` | 10 | 300 |
+| `POST`/`GET /auth/verify-email` (shared) | 10 | 100 |
+| `POST /auth/resend-verification` | 3 | 30 |
+| `POST /billing/subscribe` | 5 | 50 |
+
+IPv6 clients are counted per /64. Behind a reverse proxy, run uvicorn with `--proxy-headers` so the client address is the caller's, not the proxy's. Counters are in memory and per process (single worker, reset on restart).
 
 ---
 
