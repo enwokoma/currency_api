@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hmac
-from typing import Dict, Any
+from typing import Any, Callable, Dict
 
 from fastapi import HTTPException, Request
 
@@ -17,8 +17,9 @@ from billing_helpers import _rate_limits_for_record
 from config import (
     PLANS,
     FREE_TIER_MONTHLY_CREDITS,
+    PUBLIC_ROUTE_LIMITS,
 )
-from rate_limit import allow_request
+from rate_limit import allow_request, client_bucket
 from usage_stats import record_usage_event
 from services.user_service import get_user_by_session
 
@@ -98,6 +99,21 @@ def paid_key_required(request: Request) -> Dict[str, Any]:
             detail="This endpoint is available to paid subscriptions only.",
         )
     return _limit_and_charge(key_record)
+
+
+def public_route_limit(route: str) -> Callable[[Request], None]:
+    """Rate-limit an unauthenticated route per client address.
+
+    Limits are looked up in ``PUBLIC_ROUTE_LIMITS`` on every call. Routes that
+    share a name share one budget.
+    """
+
+    def limit(request: Request) -> None:
+        per_minute, per_day = PUBLIC_ROUTE_LIMITS[route]
+        client = client_bucket(request.client.host if request.client else None)
+        allow_request(key_hash=f"public:{route}:{client}", per_minute=per_minute, per_day=per_day)
+
+    return limit
 
 
 def session_required(request: Request) -> Dict[str, Any]:

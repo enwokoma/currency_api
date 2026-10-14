@@ -30,6 +30,7 @@ from billing_helpers import (
     billing_key_required,
 )
 from billing_schemas import SubscribePayload, UpgradePayload, VerifyTransactionPayload
+from dependencies import public_route_limit
 from config import PLANS, FREE_TIER_MONTHLY_CREDITS
 from services.transaction_service import (
     find_transaction_by_reference,
@@ -135,7 +136,11 @@ def list_plans() -> Dict[str, Any]:
     return {"plans": PLANS}
 
 
-@billing_router.post("/billing/subscribe", response_model=Dict[str, Any])
+@billing_router.post(
+    "/billing/subscribe",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(public_route_limit("subscribe"))],
+)
 def billing_subscribe(payload: SubscribePayload) -> Dict[str, Any]:
     """Create a paid key and immediately start Paystack checkout (public)."""
     plan = _get_plan_or_error(payload.plan_code)

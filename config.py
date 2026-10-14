@@ -47,6 +47,21 @@ FREE_REQUESTS_PER_MINUTE = 10
 FREE_REQUESTS_PER_DAY = 200
 FREE_TIER_MONTHLY_CREDITS = 200
 
+# Per-client limits for routes that take no credential, as (requests per
+# minute, requests per day) per route and client address. They slow password
+# and verification-code guessing, bulk key minting and checkout spam. The
+# client address is the TCP peer: behind a reverse proxy, run uvicorn with
+# --proxy-headers and --forwarded-allow-ips=<proxy address> so each client is
+# counted on its own instead of everyone sharing the proxy's budget.
+PUBLIC_ROUTE_LIMITS = {
+    "free-key": (5, 50),
+    "register": (5, 50),
+    "login": (10, 300),
+    "verify-email": (10, 100),
+    "resend-verification": (3, 30),
+    "subscribe": (5, 50),
+}
+
 # Local development only: echo email verification codes (OTP and link token)
 # in the /auth/register and /auth/resend-verification responses, for setups
 # with no mailer. Never enable it on a reachable deployment: anyone could then

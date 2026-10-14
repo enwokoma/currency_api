@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 
 from config import DEV_RETURN_VERIFICATION_CODES
 from credential_utils import header_credential
+from dependencies import public_route_limit
 from services.auth_service import generate_free_key, find_key_by_email
 from schemas import (
     FreeKeyPayload,
@@ -43,7 +44,11 @@ def _verification_view(verification: Dict[str, Any]) -> Dict[str, Any]:
     return view
 
 
-@auth_router.post("/auth/free-key", tags=["Auth"])
+@auth_router.post(
+    "/auth/free-key",
+    tags=["Auth"],
+    dependencies=[Depends(public_route_limit("free-key"))],
+)
 def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
     """Public endpoint to request a free-tier API key."""
     email_norm = payload.email.strip().lower()
@@ -66,7 +71,12 @@ def get_free_key(payload: FreeKeyPayload) -> Dict[str, str]:
     }
 
 
-@auth_router.post("/auth/register", tags=["User"], status_code=201)
+@auth_router.post(
+    "/auth/register",
+    tags=["User"],
+    status_code=201,
+    dependencies=[Depends(public_route_limit("register"))],
+)
 def register_user(payload: RegisterPayload) -> Dict[str, Any]:
     """Register a new user."""
     if payload.password != payload.confirm_password:
@@ -85,7 +95,11 @@ def register_user(payload: RegisterPayload) -> Dict[str, Any]:
     }
 
 
-@auth_router.post("/auth/resend-verification", tags=["User"])
+@auth_router.post(
+    "/auth/resend-verification",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("resend-verification"))],
+)
 def resend_verification(payload: ResendVerificationPayload) -> Dict[str, Any]:
     """Resend the verification code/link for an unverified user."""
     verification = start_verification(payload.email.strip().lower())
@@ -95,7 +109,11 @@ def resend_verification(payload: ResendVerificationPayload) -> Dict[str, Any]:
     }
 
 
-@auth_router.post("/auth/verify-email", tags=["User"])
+@auth_router.post(
+    "/auth/verify-email",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("verify-email"))],
+)
 def verify_email(payload: VerifyEmailPayload) -> Dict[str, Any]:
     """Verify a user's email address via OTP or token."""
     if bool(payload.otp) == bool(payload.token):
@@ -111,7 +129,11 @@ def verify_email(payload: VerifyEmailPayload) -> Dict[str, Any]:
     }
 
 
-@auth_router.get("/auth/verify-email", tags=["User"])
+@auth_router.get(
+    "/auth/verify-email",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("verify-email"))],
+)
 def verify_email_via_link(
     email: str = Query(..., description="Email address to verify"),
     token: str = Query(..., description="Verification token from email link"),
@@ -127,7 +149,11 @@ def verify_email_via_link(
     }
 
 
-@auth_router.post("/auth/login", tags=["User"])
+@auth_router.post(
+    "/auth/login",
+    tags=["User"],
+    dependencies=[Depends(public_route_limit("login"))],
+)
 def login(payload: LoginPayload) -> Dict[str, Any]:
     """Authenticate a user and issue a session token."""
     user = authenticate_user(email=payload.email.strip().lower(), password=payload.password)

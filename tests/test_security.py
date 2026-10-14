@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import hmac
+import time
 
+from fastapi.testclient import TestClient
+
+import config
 import helpers
+import rate_limit
 import routers.auth
 from helpers import (
     ADMIN,
@@ -241,3 +246,43 @@ def test_cors_origins_are_configured_from_the_environment():
     cors = next(m for m in helpers.main.app.user_middleware if m.cls is CORSMiddleware)
     assert cors.kwargs["allow_origins"] == config.CORS_ALLOW_ORIGINS
     assert cors.kwargs["allow_credentials"] is False
+
+
+def test_public_routes_are_rate_limited_per_client(client, monkeypatch):
+    for route in list(config.PUBLIC_ROUTE_LIMITS):
+        monkeypatch.setitem(config.PUBLIC_ROUTE_LIMITS, route, (2, 100))
+    nobody = "nobody@example.com"
+    attempts = {
+        "free-key": lambda i: client.post("/auth/free-key", json={"email": f"f{i}@example.com", "first_name": "F", "last_name": "K"}),
+        "register": lambda i: register(client, f"r{i}@example.com"),
+        "login": lambda i: client.post("/auth/login", json={"email": nobody, "password": "guess"}),
+        "resend-verification": lambda i: client.post("/auth/resend-verification", json={"email": nobody}),
+        "verify-email": lambda i: client.post("/auth/verify-email", json={"email": nobody, "otp": "123456"}),
+        "subscribe": lambda i: subscribe(client, f"s{i}@example.com"),
+    }
+    for name, call in attempts.items():
+        codes = [call(i).status_code for i in range(3)]
+        assert 429 not in codes[:2] and codes[2] == 429, (name, codes)
+    assert len(read_store("keys.json")["keys"]) == 4, "the refused free-key and subscribe calls created nothing"
+
+    # The emailed link shares the code-guessing budget with the OTP form.
+    r = client.get("/auth/verify-email", params={"email": nobody, "token": "verify_x"})
+    assert r.status_code == 429 and "per minute" in r.json()["detail"]
+
+    # Another client address keeps its own budget.
+    other = TestClient(helpers.main.app, client=("203.0.113.9", 4000))
+    assert other.post("/auth/login", json={"email": nobody, "password": "guess"}).status_code == 401
+
+
+def test_client_buckets_group_ipv6_hosts_and_stale_buckets_are_swept(monkeypatch):
+    bucket = rate_limit.client_bucket
+    assert bucket("2001:db8:1:2::1") == bucket("2001:db8:1:2:ffff::9") == "2001:db8:1:2::/64"
+    assert bucket("2001:db8:1:3::1") != bucket("2001:db8:1:2::1")
+    assert bucket("::ffff:198.51.100.7") == bucket("198.51.100.7") == "198.51.100.7"
+    assert bucket("testclient") == "testclient" and bucket(None) == "unknown"
+
+    now = time.time()
+    rate_limit.request_timestamps.update({"public:login:old": [now - 90000], "public:login:fresh": [now - 10], "empty": []})
+    monkeypatch.setattr(rate_limit, "SWEEP_EVERY", 1)
+    rate_limit.allow_request("k", per_minute=5, per_day=5)
+    assert set(rate_limit.request_timestamps) == {"public:login:fresh", "k"}
