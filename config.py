@@ -47,6 +47,12 @@ FREE_REQUESTS_PER_MINUTE = 10
 FREE_REQUESTS_PER_DAY = 200
 FREE_TIER_MONTHLY_CREDITS = 200
 
+# Per-key limit on billing calls (/billing/upgrade, /billing/verify,
+# /billing/cancel, /transactions). They cost no credits, so without a limit a
+# key could hammer them, and /billing/upgrade can start Paystack checkouts.
+BILLING_REQUESTS_PER_MINUTE = 20
+BILLING_REQUESTS_PER_DAY = 500
+
 # Per-account sign-in lockout: after this many wrong passwords for one email
 # within the window, every password check for that email (a correct one
 # included) gets 429 until older failures age out. Unknown emails are counted

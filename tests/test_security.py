@@ -22,6 +22,7 @@ from helpers import (
     free_key,
     hash_key,
     key_record,
+    rate_call,
     read_store,
     register,
     register_and_login,
@@ -436,3 +437,23 @@ def test_paid_keys_from_subscribe_go_only_to_the_inbox(client, paystack):
     assert issued not in fresh.text and checkout["authorization_url"] not in fresh.text
     assert owner_key not in helpers.last_email_to("payer@example.com").get_content()
     assert paystack.init_count == 2, "no checkout is started for a taken address"
+
+
+def test_billing_calls_are_rate_limited_per_key(client, monkeypatch):
+    import billing_helpers
+
+    monkeypatch.setattr(billing_helpers, "BILLING_REQUESTS_PER_MINUTE", 3)
+    session = register_and_login(client, "biller@example.com")
+    key = client.post("/auth/create-key", headers=session, json={"tier": "free"}).json()["api_key"]
+    by_session = {**session, "X-API-KEY-PREFIX": hash_key(key)[:8]}
+    codes = [
+        client.get("/transactions", headers={"X-API-KEY": key}).status_code,
+        client.post("/billing/upgrade", headers={"X-API-KEY": key}, json={"plan_code": "BASIC_MONTHLY"}).status_code,
+        client.get("/transactions", headers=by_session).status_code,
+    ]
+    assert codes == [200, 200, 200]
+    r = client.post("/billing/cancel", headers=by_session)
+    assert r.status_code == 429 and "per minute" in r.json()["detail"], "both ways of naming the key share one budget"
+
+    assert client.get("/transactions", headers={"X-API-KEY": free_key(client, "other-biller@example.com")}).status_code == 200
+    assert rate_call(client, key).status_code == 200, "billing calls do not use the key's API rate limit"

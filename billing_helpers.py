@@ -15,6 +15,8 @@ from services.auth_service import (
 from services.billing_service import initialize_transaction
 from services.user_service import get_user_by_session
 from config import (
+    BILLING_REQUESTS_PER_DAY,
+    BILLING_REQUESTS_PER_MINUTE,
     PLANS,
     DEFAULT_PAID_REQUESTS_PER_DAY,
     DEFAULT_PAID_REQUESTS_PER_MINUTE,
@@ -22,6 +24,7 @@ from config import (
     FREE_REQUESTS_PER_MINUTE,
 )
 from services.transaction_service import record_transaction
+from rate_limit import allow_request
 
 
 def _normalize_contact_fields(email: str, first_name: str, last_name: str) -> tuple[str, str, str]:
@@ -111,6 +114,11 @@ def billing_key_required(request: Request) -> Dict[str, Any]:
             status_code=403,
             detail="This key is inactive. Contact support or generate a new key.",
         )
+    allow_request(
+        key_hash=f"billing:{key_record['key_hash']}",
+        per_minute=BILLING_REQUESTS_PER_MINUTE,
+        per_day=BILLING_REQUESTS_PER_DAY,
+    )
     return key_record
 
 
